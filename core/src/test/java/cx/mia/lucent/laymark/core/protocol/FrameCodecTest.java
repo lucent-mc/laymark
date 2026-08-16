@@ -96,6 +96,16 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> FrameCodec.decode("{\"pid\":1}"));
     }
 
+    /** Every malformed line leaves as a {@link ProtocolException}, never a raw runtime type. */
+    @Test
+    void rejectsDiscriminatorsThatAreNotStrings() {
+        assertAll(
+                () -> assertThrows(ProtocolException.class, () -> FrameCodec.decode("{\"type\":null}")),
+                () -> assertThrows(ProtocolException.class, () -> FrameCodec.decode("{\"type\":{}}")),
+                () -> assertThrows(ProtocolException.class, () -> FrameCodec.decode("{\"type\":[1,2]}")),
+                () -> assertThrows(ProtocolException.class, () -> FrameCodec.decode(null)));
+    }
+
     @Test
     void rejectsNonObjects() {
         assertAll(
