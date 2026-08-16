@@ -12,7 +12,14 @@ chunky = "1.5.4"
 
 junit = "5.14.0"
 
+# Exactly the Gson that Minecraft 26.1.2 already ships (confirmed on the captured launch
+# classpath). Chosen so the mod side adds *zero* classes to the measured process -- Gson is
+# already there. The runner shades it, where footprint is irrelevant. Any other JSON library
+# would mean bundling one into the process being benchmarked.
+gson = "2.13.2"
+
 [libraries]
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
