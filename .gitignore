@@ -2,7 +2,10 @@
 .gradle/
 build/
 !gradle/wrapper/gradle-wrapper.jar
-!src/**/build/
+# `build/` above also matches a *package* named build, which is where the Gradle plugin task
+# lives. The leading `**/` is load-bearing: a pattern containing a slash anchors at the repo
+# root, so `!src/**/build/` never matched `build-logic/src/...` and the task went untracked.
+!**/src/**/build/
 
 # Java
 *.class
