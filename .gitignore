@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!src/**/build/
+
+# Java
+*.class
+hs_err_pid*
+replay_pid*
+
+# NeoForge / ModDevGradle dev runs
+run/
+runs/
+
+# Benchmark output — raw samples and reports are large and machine-specific
+benchmark-results/
+*.jsonl
+*.jsonl.gz
+*.sparkprofile
+
+# Machine-local config
+*.local.jsonc
+*.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
