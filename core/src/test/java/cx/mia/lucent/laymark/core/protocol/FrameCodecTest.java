@@ -115,9 +115,13 @@ class FrameCodecTest {
     }
 
     /**
-     * An unrecognised {@code type} is rejected, so an unrecognised {@link Phase} has to be too.
-     * Gson's built-in enum adapter answers {@code null} instead, which is the one shape a decoded
-     * frame must never have: it looks like a phase the harness simply did not set.
+     * An unrecognised {@code type} is rejected, so an unrecognised {@link Phase} has to be too —
+     * Gson's built-in enum adapter answers {@code null} instead, which reads downstream as a
+     * phase the harness simply did not set.
+     *
+     * <p>A wrong name is all this covers. An explicit {@code "phase":null} and an absent member
+     * both still decode to {@code null}, because Gson reaches neither adapter; that is
+     * required-field validation and it is the runner's, not the codec's.
      */
     @Test
     void rejectsUnknownPhases() {
