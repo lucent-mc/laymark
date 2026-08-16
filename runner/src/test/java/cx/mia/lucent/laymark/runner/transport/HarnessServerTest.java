@@ -144,7 +144,7 @@ class HarnessServerTest {
                 }
             });
             // Hand-rolled hello: a real client cannot claim the wrong version.
-            try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server.port())) {
+            try (Socket socket = new Socket(cx.mia.lucent.laymark.core.protocol.Loopback.ADDRESS, server.port())) {
                 socket.getOutputStream().write(
                         (FrameCodec.encode(
                                         new Frame.Hello(
@@ -171,7 +171,7 @@ class HarnessServerTest {
                     throw new RuntimeException(e);
                 }
             });
-            try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), server.port())) {
+            try (Socket socket = new Socket(cx.mia.lucent.laymark.core.protocol.Loopback.ADDRESS, server.port())) {
                 socket.getOutputStream().write(
                         (FrameCodec.encode(new Frame.Heartbeat(1L)) + "\n")
                                 .getBytes(StandardCharsets.UTF_8));
@@ -249,3 +249,4 @@ class HarnessServerTest {
         }
     }
 }
+

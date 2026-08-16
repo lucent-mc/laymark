@@ -79,19 +79,40 @@ public final class LaunchAssembly {
     }
 
     /**
-     * Libraries the platform admits, plus the unmodified version jar. Deliberately excludes the
-     * locally-patched client jar; see the class javadoc.
+     * Artifacts the descriptor lists but that must not go on a launch classpath.
+     *
+     * <p>Verified against a real launcher's command line: it lists these in {@code libraries} and
+     * then omits them when launching, and including them breaks the launch with
+     * <em>"The patched Minecraft jar is missing"</em>.
+     *
+     * <p>Both exclusions are principled rather than observed. The NeoForge universal jar is
+     * NeoForge's own <em>mod file</em>, which FML discovers through {@code libraryDirectory};
+     * putting it on the classpath instead sends discovery down a different path. Installer tools
+     * are install-time only and have no business in a running game.
+     */
+    private static final List<String> NOT_ON_CLASSPATH =
+            List.of("/neoforge/", "/installertools/");
+
+    /**
+     * Libraries the platform admits, minus the artifacts above, plus the unmodified version jar.
+     *
+     * <p>Deliberately excludes the locally-patched client jar too; see the class javadoc.
      */
     public static String classpath(
             VersionDescriptor descriptor, InstanceLayout layout, HostPlatform platform) {
         List<String> entries = new ArrayList<>();
         for (VersionDescriptor.Library library : descriptor.libraries()) {
-            if (VersionDescriptor.admitted(library.rules(), platform)) {
+            if (VersionDescriptor.admitted(library.rules(), platform) && onClasspath(library)) {
                 entries.add(join(layout.librariesDirectory(), library.path()));
             }
         }
         entries.add(layout.versionJar());
         return String.join(platform.pathSeparator(), entries);
+    }
+
+    private static boolean onClasspath(VersionDescriptor.Library library) {
+        String path = library.path().replace('\\', '/');
+        return NOT_ON_CLASSPATH.stream().noneMatch(path::contains);
     }
 
     private static Map<String, String> substitutions(

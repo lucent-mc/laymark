@@ -4,11 +4,11 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.protocol.FrameChannel;
 import cx.mia.lucent.laymark.core.protocol.FrameCodec;
+import cx.mia.lucent.laymark.core.protocol.Loopback;
 import cx.mia.lucent.laymark.core.protocol.ProtocolException;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -58,7 +58,7 @@ public final class HarnessServer implements AutoCloseable {
     public static HarnessServer bind(Path eventsFile) {
         try {
             ServerSocket socket = new ServerSocket();
-            socket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            socket.bind(new InetSocketAddress(Loopback.ADDRESS, 0));
             byte[] nonce = new byte[24];
             RANDOM.nextBytes(nonce);
             return new HarnessServer(socket, HexFormat.of().formatHex(nonce), eventsFile);
@@ -196,3 +196,4 @@ public final class HarnessServer implements AutoCloseable {
         }
     }
 }
+

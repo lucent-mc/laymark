@@ -2,7 +2,6 @@ package cx.mia.lucent.laymark.core.protocol;
 
 import cx.mia.lucent.laymark.core.Laymark;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
@@ -68,10 +67,12 @@ public final class HarnessClient implements AutoCloseable {
     public static HarnessClient connect(int port, String token, int timeoutMillis) {
         Socket socket = new Socket();
         try {
-            // Loopback only. The runner binds 127.0.0.1, and anything else would be a different
-            // machine answering.
-            socket.connect(
-                    new InetSocketAddress(InetAddress.getLoopbackAddress(), port), timeoutMillis);
+            // Literal 127.0.0.1 on both sides, deliberately, rather than getLoopbackAddress().
+            // The game is launched with -Djava.net.preferIPv6Addresses=system straight out of the
+            // launcher's descriptor, so that call answers ::1 inside the game while the runner --
+            // an ordinary JVM -- binds IPv4. Two processes, same API, different address family,
+            // connection refused on a port that is definitely listening.
+            socket.connect(new InetSocketAddress(Loopback.ADDRESS, port), timeoutMillis);
             FrameChannel channel = FrameChannel.over(socket.getInputStream(), socket.getOutputStream());
             channel.send(
                     new Frame.Hello(token, Laymark.PROTOCOL_VERSION, ProcessHandle.current().pid()));
@@ -113,3 +114,4 @@ public final class HarnessClient implements AutoCloseable {
         }
     }
 }
+
