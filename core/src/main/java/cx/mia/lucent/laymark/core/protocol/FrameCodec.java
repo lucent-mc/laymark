@@ -2,6 +2,7 @@ package cx.mia.lucent.laymark.core.protocol;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
@@ -69,16 +70,25 @@ public final class FrameCodec {
     }
 
     public static Frame decode(String line) {
+        if (line == null) {
+            throw new ProtocolException("frame is not a JSON object: " + abbreviate(line));
+        }
         JsonObject object;
         try {
             object = JsonParser.parseString(line).getAsJsonObject();
         } catch (JsonParseException | IllegalStateException e) {
             throw new ProtocolException("frame is not a JSON object: " + abbreviate(line), e);
         }
-        if (!object.has(TYPE)) {
-            throw new ProtocolException("frame has no '" + TYPE + "': " + abbreviate(line));
+        // A discriminator that is null, an object or an array satisfies has() and then throws
+        // out of getAsString(); every malformed line has to leave here as a ProtocolException.
+        JsonElement discriminator = object.get(TYPE);
+        if (discriminator == null
+                || !discriminator.isJsonPrimitive()
+                || !discriminator.getAsJsonPrimitive().isString()) {
+            throw new ProtocolException(
+                    "frame has no string '" + TYPE + "': " + abbreviate(line));
         }
-        String name = object.get(TYPE).getAsString();
+        String name = discriminator.getAsString();
         Class<? extends Frame> type = BY_NAME.get(name);
         if (type == null) {
             throw new ProtocolException(
