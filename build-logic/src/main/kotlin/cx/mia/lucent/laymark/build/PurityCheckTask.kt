@@ -43,14 +43,38 @@ abstract class PurityCheckTask : DefaultTask() {
     @get:Input
     abstract val forbiddenPackages: ListProperty<String>
 
+    /**
+     * Whether to also reject the dotted form, which appears in string literals.
+     *
+     * On by default: it catches a reflective `Class.forName("net.minecraft...")` leak that no
+     * import check would see.
+     *
+     * The runner turns it off. Its job is assembling a launch command *for* a loader, so loader
+     * class names legitimately appear in its data -- a descriptor's `mainClass`, a test fixture
+     * of one. It still must not *import* them, which the slash form enforces, and reflection is
+     * not a risk there because those classes are not on its classpath to begin with.
+     */
+    @get:Input
+    abstract val checkStringLiterals: org.gradle.api.provider.Property<Boolean>
+
     @get:OutputFile
     abstract val stamp: RegularFileProperty
+
+    init {
+        // An @Input Property with no value fails the task outright, and most modules never set
+        // this one. Strict is the right default; the runner opts out and says why.
+        checkStringLiterals.convention(true)
+    }
 
     @TaskAction
     fun check() {
         val packages = forbiddenPackages.get()
-        // Both encodings: slash for class references, dot for string literals.
-        val needles = packages.flatMap { listOf(it.replace('.', '/'), it) }
+        val alsoStrings = checkStringLiterals.getOrElse(true)
+        // Slash is how a class reference is encoded; dot is how a string literal is.
+        val needles =
+            packages.flatMap {
+                if (alsoStrings) listOf(it.replace('.', '/'), it) else listOf(it.replace('.', '/'))
+            }
         val violations = mutableListOf<String>()
         var scanned = 0
 
