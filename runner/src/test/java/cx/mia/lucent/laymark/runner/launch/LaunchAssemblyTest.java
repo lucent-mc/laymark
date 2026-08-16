@@ -167,6 +167,29 @@ class LaunchAssemblyTest {
         assertFalse(cp.contains("patched"), cp);
     }
 
+    /**
+     * The descriptor lists artifacts a launch must not put on the classpath. Verified the hard
+     * way: including them fails the launch with "The patched Minecraft jar is missing", because
+     * the NeoForge universal jar is its own mod file -- discovered through libraryDirectory --
+     * and putting it on the classpath sends FML's discovery down a different path.
+     */
+    @Test
+    void excludesModFilesAndInstallerToolsFromTheClasspath() {
+        String descriptor =
+                """
+                { "id": "v", "mainClass": "M", "assetIndex": { "id": "1" }, "libraries": [
+                  { "downloads": { "artifact": { "path": "com/example/keep/1.0/keep-1.0.jar" } } },
+                  { "downloads": { "artifact": { "path": "net/neoforged/neoforge/26.1.2.95/neoforge-26.1.2.95-universal.jar" } } },
+                  { "downloads": { "artifact": { "path": "net/neoforged/installertools/4.0.12/installertools-4.0.12-fatjar.jar" } } }
+                ] }
+                """;
+        String cp = LaunchAssembly.classpath(
+                VersionDescriptor.parse(descriptor), LAYOUT, HostPlatform.windowsX64());
+        assertTrue(cp.contains("keep-1.0.jar"), cp);
+        assertFalse(cp.contains("universal"), cp);
+        assertFalse(cp.contains("installertools"), cp);
+    }
+
     @Test
     void mainClassSeparatesJvmArgumentsFromGameArguments() {
         List<String> argv = assemble(HostPlatform.windowsX64());
