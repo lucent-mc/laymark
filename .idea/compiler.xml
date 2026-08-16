@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CompilerConfiguration">
+    <bytecodeTargetLevel target="25" />
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="laymark.core" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.core.main" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.core.test" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.fabric" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.fabric.main" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.fabric.test" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.minecraft-common" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.minecraft-common.main" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.minecraft-common.test" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.neoforge" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.neoforge.main" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.neoforge.test" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.runner" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.runner.main" options="-Xlint:all,-serial,-processing" />
+      <module name="laymark.runner.test" options="-Xlint:all,-serial,-processing" />
+    </option>
+  </component>
+</project>

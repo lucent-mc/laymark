@@ -35,6 +35,11 @@ public final class FrameCodec {
     // an escaped `renderDistance=12` is not greppable. Nothing here reaches a web page.
     // Enums go through a strict adapter, because Gson's built-in one answers null for a name it
     // does not know -- indistinguishable downstream from a field the harness never set.
+    //
+    // This covers a wrong *name* only. An explicit JSON null and an absent member both still
+    // decode to null: Gson short-circuits the first before any adapter runs and never consults
+    // one for the second. Rejecting those is required-field validation, which belongs with the
+    // runner's handshake checks rather than here -- see Frame.Hello.
     private static final Gson GSON =
             new GsonBuilder()
                     .serializeNulls()
