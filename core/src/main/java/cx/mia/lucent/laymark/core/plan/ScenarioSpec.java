@@ -20,18 +20,18 @@ public record ScenarioSpec(
 
     public ScenarioSpec {
         if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("scenario id must not be blank");
+            throw new PlanException("scenario id must not be blank");
         }
         if (stopCondition == null) {
-            throw new IllegalArgumentException("scenario " + id + " needs a stop condition");
+            throw new PlanException("scenario " + id + " needs a stop condition");
         }
         if (repetitions < 1) {
-            throw new IllegalArgumentException(
+            throw new PlanException(
                     "scenario " + id + " needs at least one repetition, got " + repetitions);
         }
         dependsOn = dependsOn == null ? List.of() : List.copyOf(dependsOn);
         if (dependsOn.contains(id)) {
-            throw new IllegalArgumentException("scenario " + id + " depends on itself");
+            throw new PlanException("scenario " + id + " depends on itself");
         }
     }
 

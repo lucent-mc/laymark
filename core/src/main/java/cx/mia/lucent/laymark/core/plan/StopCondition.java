@@ -18,7 +18,7 @@ public sealed interface StopCondition {
     record FixedDuration(long millis) implements StopCondition {
         public FixedDuration {
             if (millis <= 0) {
-                throw new IllegalArgumentException("duration must be positive, got " + millis);
+                throw new PlanException("duration must be positive, got " + millis);
             }
         }
 
@@ -42,10 +42,10 @@ public sealed interface StopCondition {
     record UntilComplete(String target, long timeoutMillis) implements StopCondition {
         public UntilComplete {
             if (target == null || target.isBlank()) {
-                throw new IllegalArgumentException("completion target must be named");
+                throw new PlanException("completion target must be named");
             }
             if (timeoutMillis <= 0) {
-                throw new IllegalArgumentException(
+                throw new PlanException(
                         "a completion target needs a timeout, or a broken stack hangs the run");
             }
         }
