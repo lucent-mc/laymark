@@ -1,6 +1,7 @@
 package cx.mia.lucent.laymark.core.plan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -49,6 +50,17 @@ class ScenarioOrderTest {
     }
 
     /**
+     * Declaration order is the tie-break, not traversal order. Here {@code c} and {@code b} are
+     * both runnable from the start and {@code c} is declared first, so {@code c} runs first even
+     * though {@code b} unblocks the scenario declared above it.
+     */
+    @Test
+    void readyScenariosKeepDeclarationOrder() {
+        var ordered = ScenarioOrder.resolve(List.of(spec("a", "b"), spec("c"), spec("b")));
+        assertEquals(List.of("c", "b", "a"), idsOf(ordered));
+    }
+
+    /**
      * Order must be stable across runs. Array position is part of a scenario's identity --
      * scenario 1 runs against a colder JVM than scenario 5 -- so an ordering that varied
      * between runs would silently make two arms incomparable.
@@ -69,6 +81,19 @@ class ScenarioOrderTest {
                         PlanException.class,
                         () -> ScenarioOrder.resolve(List.of(spec("a", "b"), spec("b", "a"))));
         assertTrue(e.getMessage().contains("cycle"), e.getMessage());
+    }
+
+    /** The path must name the cycle, not the acyclic run-up that reached it. */
+    @Test
+    void cycleDiagnosticNamesOnlyTheCycle() {
+        var e =
+                assertThrows(
+                        PlanException.class,
+                        () ->
+                                ScenarioOrder.resolve(
+                                        List.of(spec("x", "a"), spec("a", "b"), spec("b", "a"))));
+        assertTrue(e.getMessage().contains("a -> b -> a"), e.getMessage());
+        assertFalse(e.getMessage().contains("x"), e.getMessage());
     }
 
     @Test
