@@ -30,13 +30,19 @@ public record RunPlan(
             throw new PlanException("run " + runId + " has no output directory");
         }
         scenarios = List.copyOf(scenarios);
+        // Resolved means resolvable. A plan is archived with the results and launched from, so
+        // leaving the graph unchecked until someone calls executionOrder() makes validation
+        // optional on the one type whose job is to be already valid.
+        ScenarioOrder.resolve(scenarios);
     }
 
     public static RunPlan of(String runId, String outputDirectory, List<ScenarioSpec> scenarios) {
         return new RunPlan(runId, Laymark.PROTOCOL_VERSION, scenarios, outputDirectory);
     }
 
-    /** Validates the dependency graph and returns the deterministic execution order. */
+    /**
+     * The deterministic execution order. Cannot fail: the graph was resolved at construction.
+     */
     public List<ScenarioSpec> executionOrder() {
         return ScenarioOrder.resolve(scenarios);
     }
