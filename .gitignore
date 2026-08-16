@@ -30,3 +30,8 @@ benchmark-results/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# IntelliJ. Gradle regenerates all of it on import, and it churns on every sync --
+# 136 files appeared from one Gradle import during this slice.
+.idea/
+*.iml
