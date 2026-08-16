@@ -114,6 +114,36 @@ class FrameCodecTest {
                 () -> assertThrows(ProtocolException.class, () -> FrameCodec.decode("")));
     }
 
+    /**
+     * An unrecognised {@code type} is rejected, so an unrecognised {@link Phase} has to be too.
+     * Gson's built-in enum adapter answers {@code null} instead, which is the one shape a decoded
+     * frame must never have: it looks like a phase the harness simply did not set.
+     */
+    @Test
+    void rejectsUnknownPhases() {
+        ProtocolException e =
+                assertThrows(
+                        ProtocolException.class,
+                        () ->
+                                FrameCodec.decode(
+                                        "{\"type\":\"phase-entered\",\"scenarioId\":\"x\","
+                                                + "\"phase\":\"WARP_DRIVE\",\"monotonicNanos\":1}"));
+        assertTrue(e.getMessage().contains("phase-entered"), e.getMessage());
+    }
+
+    /**
+     * The durable format is the diagnostic surface, so an operator reading {@code events.jsonl}
+     * must see the drift message the harness wrote, not its escape sequences.
+     */
+    @Test
+    void keepsDiagnosticTextReadable() {
+        String encoded =
+                FrameCodec.encode(
+                        new Frame.RunFailed(
+                                "preset-drift", "renderDistance=12, expected 32 & fov<90"));
+        assertTrue(encoded.contains("renderDistance=12, expected 32 & fov<90"), encoded);
+    }
+
     /** A string carrying a newline must not break the framing. */
     @Test
     void survivesNewlinesInsidePayloads() {
