@@ -117,6 +117,6 @@ class ScenarioOrderTest {
 
     @Test
     void rejectsSelfDependency() {
-        assertThrows(IllegalArgumentException.class, () -> spec("a", "a"));
+        assertThrows(PlanException.class, () -> spec("a", "a"));
     }
 }

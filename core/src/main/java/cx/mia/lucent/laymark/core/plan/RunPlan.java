@@ -26,6 +26,13 @@ public record RunPlan(
         if (scenarios == null || scenarios.isEmpty()) {
             throw new PlanException("run " + runId + " has no scenarios");
         }
+        if (protocolVersion < 1) {
+            // Not an equality test against the current constant: an archived plan from an older
+            // protocol must stay readable for auditing. This catches the absent field, which
+            // deserializes to 0 and would otherwise fail only at the handshake, after the launch.
+            throw new PlanException(
+                    "run " + runId + " has no protocol version, got " + protocolVersion);
+        }
         if (outputDirectory == null || outputDirectory.isBlank()) {
             throw new PlanException("run " + runId + " has no output directory");
         }
