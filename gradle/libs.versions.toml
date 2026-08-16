@@ -1,0 +1,21 @@
+[versions]
+# The exact target tuple. Every result records these; the runner refuses a mismatch.
+java = "25"
+minecraft = "26.1.2"
+neoforge = "26.1.2.95"
+
+# Instrumentation. Runtime artifacts are pinned by Modrinth version ID plus hash
+# verification when they are materialised into an instance -- these coordinates are
+# for compile-time APIs only, and are added in the slice that needs them.
+spark = "1.10.173"
+chunky = "1.5.4"
+
+junit = "5.14.0"
+
+[libraries]
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+moddev = { id = "net.neoforged.moddev", version = "2.0.144" }

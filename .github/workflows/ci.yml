@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The spec makes platform an experimental stratum, and the runner does substantial
+  # filesystem and process work that does not behave identically across them -- moving
+  # files, renaming suffixes, owning a child process, binding loopback. Java compiling
+  # everywhere is not the thing being verified here.
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ModDevGradle downloads and patches Minecraft. Cached separately from the Gradle
+      # cache because it is large, slow to rebuild, and keyed only by the target tuple.
+      - name: Cache Minecraft artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.neoform
+            ~/.neoformruntime
+          key: mc-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: mc-${{ runner.os }}-
+
+      # `check` includes purityCheck on core, runner and minecraft-common. That gate is
+      # architecture rather than hygiene: tier-1 testing exists only while core stays free
+      # of game and loader imports, and its failure mode is silent.
+      - name: Build and check
+        run: ./gradlew build --stacktrace
+
+      - name: Upload artifacts
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: laymark-jars
+          path: |
+            */build/libs/*.jar
+            !**/*-sources.jar
+          if-no-files-found: error

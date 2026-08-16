@@ -1,0 +1,31 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "All Rights Reserved"
+issueTrackerURL = "https://github.com/lucent-mc/laymark/issues"
+
+[[mods]]
+modId = "laymark"
+version = "${version}"
+displayName = "Laymark"
+authors = "mia"
+description = '''
+Automated benchmarking of Minecraft modpacks and modpack diffs.
+
+Laymark is a development-time tool. It is not a distribution artifact and must not appear in a
+shipped modpack.
+'''
+
+[[dependencies.laymark]]
+modId = "neoforge"
+type = "required"
+# FlipFrameEvent, which carries the frame trigger, landed in build 26.1.2.73.
+versionRange = "[26.1.2.73,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.laymark]]
+modId = "minecraft"
+type = "required"
+versionRange = "[26.1.2,26.1.3)"
+ordering = "NONE"
+side = "CLIENT"
