@@ -2,10 +2,13 @@ package cx.mia.lucent.laymark.core.protocol;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import cx.mia.lucent.laymark.core.Phase;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -28,7 +31,33 @@ public final class FrameCodec {
 
     private static final String TYPE = "type";
 
-    private static final Gson GSON = new GsonBuilder().serializeNulls().create();
+    // HTML escaping stays off: the durable format is read by an operator diagnosing a run, and
+    // an escaped `renderDistance=12` is not greppable. Nothing here reaches a web page.
+    // Enums go through a strict adapter, because Gson's built-in one answers null for a name it
+    // does not know -- indistinguishable downstream from a field the harness never set.
+    private static final Gson GSON =
+            new GsonBuilder()
+                    .serializeNulls()
+                    .disableHtmlEscaping()
+                    .registerTypeAdapter(Phase.class, strictEnum(Phase.class, Phase.values()))
+                    .create();
+
+    private static <E extends Enum<E>> JsonDeserializer<E> strictEnum(Class<E> type, E[] values) {
+        return (json, unused, context) -> {
+            if (!json.isJsonPrimitive() || !json.getAsJsonPrimitive().isString()) {
+                throw new JsonParseException(type.getSimpleName() + " must be a string");
+            }
+            String name = json.getAsString();
+            for (E value : values) {
+                if (value.name().equals(name)) {
+                    return value;
+                }
+            }
+            throw new JsonParseException(
+                    "unknown " + type.getSimpleName() + " '" + name + "'; known values are "
+                            + Arrays.toString(values));
+        };
+    }
 
     private static final Map<String, Class<? extends Frame>> BY_NAME = new LinkedHashMap<>();
     private static final Map<Class<? extends Frame>, String> BY_CLASS = new LinkedHashMap<>();
