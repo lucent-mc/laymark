@@ -1,12 +1,16 @@
 package cx.mia.lucent.laymark.core.plan;
 
+import cx.mia.lucent.laymark.core.harness.Pose;
+import cx.mia.lucent.laymark.core.harness.Preset;
 import java.util.List;
 
 /**
  * One entry in the {@code scenarios[]} array, fully resolved.
  *
  * <p>A resolved plan contains expanded values, never references to mutable named presets, so a
- * historical result stays interpretable after the config that produced it has changed.
+ * historical result stays interpretable after the config that produced it has changed. That is why
+ * the preset is embedded here in full rather than named: the config file it came from is a living
+ * document, and a result that points at a name is a result whose meaning can change after the fact.
  *
  * @param id stable identifier; {@code dependsOn} refers to it and results are keyed by it
  * @param dependsOn scenarios that must run first. Dependency implies world reuse: a scenario
@@ -14,9 +18,18 @@ import java.util.List;
  * @param stopCondition how the scenario ends, and therefore its scored metric
  * @param repetitions how many times the scenario repeats within a single arm run. Distinct from
  *     the schedule template, which governs how arm runs are ordered.
+ * @param preset the graphics settings to pin before the world loads
+ * @param pose where the player is placed and what it looks at
+ * @param seed the world seed; identical across arms, or the comparison is between landscapes
  */
 public record ScenarioSpec(
-        String id, List<String> dependsOn, StopCondition stopCondition, int repetitions) {
+        String id,
+        List<String> dependsOn,
+        StopCondition stopCondition,
+        int repetitions,
+        Preset preset,
+        Pose pose,
+        long seed) {
 
     public ScenarioSpec {
         if (id == null || id.isBlank()) {
@@ -29,11 +42,31 @@ public record ScenarioSpec(
             throw new PlanException(
                     "scenario " + id + " needs at least one repetition, got " + repetitions);
         }
+        if (preset == null) {
+            throw new PlanException("scenario " + id + " needs a preset");
+        }
+        if (pose == null) {
+            throw new PlanException("scenario " + id + " needs a pose");
+        }
         dependsOn = dependsOn == null ? List.of() : List.copyOf(dependsOn);
         if (dependsOn.contains(id)) {
             throw new PlanException("scenario " + id + " depends on itself");
         }
     }
+
+    /**
+     * A scenario at the default preset and pose.
+     *
+     * <p>Defaults rather than absent values: a plan is resolved by definition, so there is no such
+     * thing as a scenario without a preset — only one that did not choose.
+     */
+    public ScenarioSpec(
+            String id, List<String> dependsOn, StopCondition stopCondition, int repetitions) {
+        this(id, dependsOn, stopCondition, repetitions, Preset.defaults(), DEFAULT_POSE, 0L);
+    }
+
+    /** High enough to be clear of terrain at any elevation vanilla generates. */
+    private static final Pose DEFAULT_POSE = Pose.lookingDown(0.5, 200, 0.5);
 
     public static ScenarioSpec of(String id, StopCondition stopCondition) {
         return new ScenarioSpec(id, List.of(), stopCondition, 1);

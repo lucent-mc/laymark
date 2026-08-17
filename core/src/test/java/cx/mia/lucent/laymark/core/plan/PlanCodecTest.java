@@ -12,6 +12,19 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 class PlanCodecTest {
 
+    /**
+     * A resolved scenario spells out its preset and pose in full. Hand-written fixtures below
+     * carry them so they exercise the property under test rather than tripping over an incomplete
+     * scenario first.
+     */
+    private static final String PRESET_AND_POSE =
+            """
+            "preset":{"renderDistance":12,"simulationDistance":12,"framerateLimit":260,
+             "vsync":false,"particles":"ALL","clouds":"FANCY",
+             "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70},
+            "pose":{"x":0.5,"y":200.0,"z":0.5,"yaw":0.0,"pitch":90.0},"seed":0
+            """;
+
     static Stream<StopCondition> everyStopCondition() {
         return Stream.of(
                 new StopCondition.FixedDuration(45_000),
@@ -90,12 +103,44 @@ class PlanCodecTest {
                 """
                 {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
                   {"id":"a","dependsOn":["b"],"repetitions":1,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000}},
+                   "stopCondition":{"kind":"fixed-duration","millis":1000},PRESET},
                   {"id":"b","dependsOn":["a"],"repetitions":1,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000}}]}
-                """;
+                   "stopCondition":{"kind":"fixed-duration","millis":1000},PRESET}]}
+                """
+                        .replace("PRESET", PRESET_AND_POSE);
         PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(cyclic));
         assertTrue(e.getMessage().contains("cycle"), e.getMessage());
+    }
+
+    @Test
+    void rejectsAScenarioWithNoPreset() {
+        String json =
+                """
+                {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
+                  {"id":"s","dependsOn":[],"repetitions":1,
+                   "stopCondition":{"kind":"fixed-duration","millis":1000}}]}
+                """;
+        PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(json));
+        assertTrue(e.getMessage().contains("preset"), e.getMessage());
+    }
+
+    /**
+     * The preset validates itself and reports a harness failure. At read time that is a malformed
+     * plan, and it has to reach the caller as one -- every caller here catches {@link
+     * PlanException} and nothing else.
+     */
+    @Test
+    void anInvalidPresetFromDiskFailsAsAPlanProblem() {
+        String json =
+                """
+                {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
+                  {"id":"s","dependsOn":[],"repetitions":1,
+                   "stopCondition":{"kind":"fixed-duration","millis":1000},PRESET}]}
+                """
+                        .replace("PRESET", PRESET_AND_POSE)
+                        .replace("\"renderDistance\":12", "\"renderDistance\":900");
+        PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(json));
+        assertTrue(e.getMessage().contains("renderDistance"), e.getMessage());
     }
 
     @Test
