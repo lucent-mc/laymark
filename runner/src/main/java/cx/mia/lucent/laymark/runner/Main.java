@@ -70,6 +70,12 @@ public final class Main {
                             .toAbsolutePath();
 
             RunPlan plan = plan(runId, outputDirectory, options);
+
+            if (options.containsKey("selftest")) {
+                selfTest(instance, plan, outputDirectory, sceneRoot(options), options);
+                return;
+            }
+
             RunResult result =
                     BenchmarkRun.execute(
                             instance,
@@ -115,6 +121,72 @@ public final class Main {
                         ? readConfig(Path.of(options.get("config")))
                         : configFromFlags(options);
         return config.resolve(runId, outputDirectory.toString());
+    }
+
+    /**
+     * Four identical baseline runs, which must report no difference between any of them.
+     *
+     * <p>The first evidence the spec demands, and the cheapest thing that can invalidate
+     * everything else: if Laymark claims one identical run beat another, nothing it says about a
+     * real candidate is worth reading. Every mod currently installed participates and stays
+     * enabled in every arm, so no file moves and the only variable is the machine.
+     */
+    private static void selfTest(
+            ModrinthInstance instance,
+            RunPlan plan,
+            Path outputDirectory,
+            Path sceneRoot,
+            Map<String, String> options)
+            throws java.io.IOException {
+
+        var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(instance.gameDirectory());
+        var installed = mods.read().enabledNames();
+
+        // Alternating B,C,B,C... where the "candidate" is byte-identical to the baseline. All
+        // baselines would compare nothing at all, which is a test that cannot fail.
+        int arms = Integer.parseInt(options.getOrDefault("arms", "6"));
+        List<cx.mia.lucent.laymark.core.experiment.Arm> runs = new java.util.ArrayList<>();
+        for (int i = 0; i < arms; i++) {
+            boolean baseline = i % 2 == 0;
+            runs.add(
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            baseline ? "baseline" : "control",
+                            baseline
+                                    ? cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE
+                                    : cx.mia.lucent.laymark.core.experiment.Arm.Kind.CANDIDATE,
+                            installed));
+        }
+
+        var report =
+                ExperimentRun.execute(
+                        instance,
+                        plan,
+                        runs,
+                        installed,
+                        outputDirectory,
+                        sceneRoot,
+                        Duration.ofSeconds(Long.parseLong(options.getOrDefault("timeout", "900"))));
+
+        System.out.printf("%nself-test: %d runs, %d voided window(s)%n", arms, report.voids().size());
+        if (report.comparisons().isEmpty()) {
+            System.out.println("FAILED: nothing was compared, so nothing was tested");
+            System.exit(2);
+        }
+        boolean clean = true;
+        for (var comparison : report.comparisons()) {
+            System.out.printf("  %s%n", comparison.describe());
+            if (comparison.band() != cx.mia.lucent.laymark.core.stats.Band.NO_MEASURABLE_DIFFERENCE) {
+                clean = false;
+            }
+        }
+        System.out.println(
+                clean
+                        ? "PASSED: no identical run beat another"
+                        : "FAILED: an identical run was reported as different");
+        if (!clean) {
+            System.exit(2);
+        }
+        System.out.printf("report written to %s%n", outputDirectory.resolve("report.md"));
     }
 
     /** Scene paths are relative to the config that declared them, or to the working directory. */
@@ -215,6 +287,8 @@ public final class Main {
                   --repetitions <n>       repeats, each in a fresh world (default 1)
                   --render-distance <n>   chunks, also used as simulation distance (default 12)
                   --timeout <seconds>     how long to wait for the run (default 900)
+  --selftest              run N identical baselines and check none beats another
+  --arms <n>              how many baselines the self-test uses (default 4)
                 %n""",
                 Laymark.PROTOCOL_VERSION);
     }
