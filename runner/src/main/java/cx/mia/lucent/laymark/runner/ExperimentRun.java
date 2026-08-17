@@ -46,25 +46,41 @@ public final class ExperimentRun {
             java.util.Set<String> participants,
             Path outputDirectory,
             Path sceneRoot,
-            Duration timeoutPerRun)
+            Duration timeoutPerRun,
+            RunControl control,
+            ExperimentListener listener)
             throws IOException {
 
         ModsDirectory mods = new ModsDirectory(instance.gameDirectory());
         InstanceState initial = mods.read();
+        Boolean sparkProfiler = SparkConfig.disableBackgroundProfiler(instance.gameDirectory());
         long startedAt = System.nanoTime();
 
         List<Measured> measured = new ArrayList<>();
         List<Comparison.Run> baselineRuns = new ArrayList<>();
+        // One round for now: the greedy driver that makes several is slice 9, and until it exists
+        // the honest total is the arms actually scheduled.
+        listener.scheduleBuilt(new ExperimentListener.Slate(runs, 1, 1, runs.size()));
 
         try {
             for (int sequence = 0; sequence < runs.size(); sequence++) {
                 Arm arm = runs.get(sequence);
+                if (control.pauseRequested()) {
+                    listener.stateChanged("paused");
+                }
+                if (!control.awaitClearance()) {
+                    // Stopped at a boundary: everything measured so far still becomes a report.
+                    listener.stateChanged("stopping");
+                    break;
+                }
+                listener.stateChanged("running");
+                listener.runStarted(sequence, arm);
                 System.out.printf("%n=== run %d/%d: %s%n", sequence + 1, runs.size(), arm.id());
 
                 mods.apply(Materialization.plan(mods.read(), participants, arm.enabled()));
                 // Immediately before launching, not after planning. A rename that silently failed
                 // leaves a folder that boots perfectly and runs the wrong stack.
-                Materialization.verify(mods.read(), arm.enabled());
+                Materialization.verify(mods.read(), arm.enabled(), initial);
 
                 Path armOutput = outputDirectory.resolve(String.format("%03d-%s", sequence, arm.id()));
                 // Per-arm output directory, carried on the plan itself. The harness writes its
@@ -76,27 +92,57 @@ public final class ExperimentRun {
                                 plan.protocolVersion(),
                                 plan.scenarios(),
                                 armOutput.toString());
-                RunResult result =
-                        BenchmarkRun.execute(instance, armPlan, armOutput, sceneRoot, timeoutPerRun);
+                RunResult result;
+                try {
+                    result =
+                            BenchmarkRun.execute(
+                                    instance,
+                                    armPlan,
+                                    armOutput,
+                                    sceneRoot,
+                                    timeoutPerRun,
+                                    control,
+                                    listener);
+                } catch (RuntimeException e) {
+                    if (control.stopping()) {
+                        // The stop killed the game mid-run; that is the stop working, not a defect.
+                        listener.runFinished(sequence, arm, 0, true);
+                        break;
+                    }
+                    throw e;
+                }
 
                 if (!arm.scored()) {
                     System.out.println("  (acclimation, discarded)");
+                    // Discarded is not unfinished: the schedule row has to turn green, or the
+                    // window shows a run forever in flight.
+                    listener.runFinished(sequence, arm, 0, false);
                     continue;
                 }
+                double total = 0;
+                int counted = 0;
                 for (ScenarioResult scenario : result.scenarios()) {
                     if (!scenario.measured()) {
                         continue;
                     }
-                    double scored = scenario.statistics().meanMillis();
+                    // Scored on what the stop condition selected. A completion target produces a
+                    // variable-length window, so its frame distribution is not comparable across
+                    // arms -- time per unit of work is, which is the point of the target.
+                    double scored = scored(scenario, plan);
+                    total += scored;
+                    counted++;
                     measured.add(new Measured(arm.id(), sequence, scenario.scenarioId(), scored));
                     if (arm.kind() == Arm.Kind.BASELINE) {
                         baselineRuns.add(new Comparison.Run(arm.id(), sequence, scored, true));
                     }
                 }
+                listener.runFinished(
+                        sequence, arm, counted == 0 ? 0 : total / counted, counted == 0);
             }
         } finally {
             // Unconditional, including after a crash mid-schedule. Restoring to the recorded start
             // is the same operation whether the run finished or died.
+            SparkConfig.restore(instance.gameDirectory(), sparkProfiler);
             mods.apply(Materialization.restore(mods.read(), initial));
             if (!mods.read().matches(initial)) {
                 System.err.println("WARNING: the instance was not fully restored; check mods/");
@@ -106,6 +152,8 @@ public final class ExperimentRun {
         List<Drift.VoidWindow> voids = Drift.detect(baselineRuns);
         SelectionReport report =
                 report(plan, runs, measured, baselineRuns, voids, startedAt);
+        listener.roundCompleted(1, "baseline", report.comparisons(), null);
+        listener.finished(report);
 
         Files.createDirectories(outputDirectory);
         Files.writeString(
@@ -174,6 +222,31 @@ public final class ExperimentRun {
                 Map.of(
                         "java", System.getProperty("java.version"),
                         "scenarios", String.valueOf(plan.scenarios().size())));
+    }
+
+    /**
+     * The scored metric for one scenario, chosen by its stop condition.
+     *
+     * <p>A duration or frame target gives both arms the same window, so the frame distribution is
+     * comparable. A chunk target does not: the faster stack finishes sooner, so the two arms
+     * observe windows of different length and only cost-per-unit-of-work compares.
+     */
+    private static double scored(ScenarioResult scenario, RunPlan plan) {
+        var spec =
+                plan.scenarios().stream()
+                        .filter(s -> s.id().equals(scenario.scenarioId()))
+                        .findFirst()
+                        .orElseThrow();
+        if (spec.stopCondition().kind() == cx.mia.lucent.laymark.core.plan.StopCondition.Kind.CHUNKS) {
+            Double perChunk =
+                    scenario.segments().get(scenario.segments().size() - 1)
+                            .measurement()
+                            .millisPerChunkReceived();
+            if (perChunk != null) {
+                return perChunk;
+            }
+        }
+        return scenario.statistics().meanMillis();
     }
 
     private static boolean hasScenario(List<Measured> measured, int sequence, String scenarioId) {

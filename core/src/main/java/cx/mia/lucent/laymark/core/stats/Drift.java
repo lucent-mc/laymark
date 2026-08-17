@@ -69,7 +69,7 @@ public final class Drift {
                         new VoidWindow(
                                 baselines.get(i - 1).sequence(),
                                 current.sequence(),
-                                String.format(
+                                String.format(java.util.Locale.ROOT, 
                                         "baseline moved %.1f standard deviations from its own"
                                                 + " history (%.2fms against a mean of %.2fms)",
                                         distance, current.scoredMillis(), mean)));

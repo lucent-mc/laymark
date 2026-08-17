@@ -12,6 +12,7 @@ import java.util.List;
  *   B     one baseline run
  *   C     one round-robin pass over the remaining candidates
  *   Cn    blocked repetition: each candidate n times consecutively
+ *   CC    the same thing written by hand; CC is C2, CCC is C3
  * </pre>
  *
  * <p>Re-expanded rather than expanded once, because the candidate list shrinks as candidates are
@@ -101,6 +102,11 @@ public record RoundTemplate(List<Slot> slots) {
     private static int repeats(String symbol, String template) {
         if (symbol.length() == 1) {
             return 1;
+        }
+        // "CC" and "C2" say the same thing. Repeating the letter is what people reach for when
+        // writing a schedule by hand, and refusing it teaches nothing.
+        if (symbol.chars().allMatch(character -> character == 'C')) {
+            return symbol.length();
         }
         try {
             int repeats = Integer.parseInt(symbol.substring(1));

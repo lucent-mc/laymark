@@ -1,16 +1,9 @@
 package cx.mia.lucent.laymark.runner;
 
 import cx.mia.lucent.laymark.core.Laymark;
-import cx.mia.lucent.laymark.core.harness.Pose;
-import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
-import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
 import cx.mia.lucent.laymark.core.scenario.ScenarioConfig;
-import cx.mia.lucent.laymark.core.scenario.PresetRef;
-import cx.mia.lucent.laymark.core.scenario.ScenarioDefinition;
-import cx.mia.lucent.laymark.core.scenario.StopSpec;
-import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.runner.launch.LaunchException;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
@@ -40,14 +33,16 @@ public final class Main {
     private static final DateTimeFormatter RUN_ID =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
-    /** Above any terrain vanilla generates, so the pose does not depend on the seed's landscape. */
-    private static final double OBSERVATION_ALTITUDE = 200;
-
     public static void main(String[] args) {
         Map<String, String> options = parse(args);
 
-        if (options.containsKey("help") || options.isEmpty()) {
+        if (options.containsKey("help")) {
             usage();
+            return;
+        }
+        if (options.isEmpty()) {
+            // Double-clicking the jar lands here. Nothing was said about what to run, so ask.
+            plannedRun();
             return;
         }
 
@@ -62,32 +57,66 @@ public final class Main {
 
             String runId = LocalDateTime.now().format(RUN_ID);
             // Absolute, always. The harness reads this path from inside the game process, whose
-            // working directory is the instance -- a relative path would write results into the
-            // modpack.
+            // working directory is the instance -- a relative path would resolve somewhere else.
             Path outputDirectory =
-                    Path.of(options.getOrDefault("out", "benchmark-results"))
+                    (options.containsKey("out")
+                                    ? Path.of(options.get("out"))
+                                    : instance.gameDirectory().resolve(Laymark.WORK_DIR))
                             .resolve(runId)
                             .toAbsolutePath();
 
-            RunPlan plan = plan(runId, outputDirectory, options);
+            RunPlan plan = plan(instance, runId, outputDirectory);
+
+            RunControl control = new RunControl();
+            ExperimentListener listener = ExperimentListener.none();
+            if (options.containsKey("gui")) {
+                var window = cx.mia.lucent.laymark.runner.gui.RunnerWindow.openRunning(control);
+                listener = window;
+                // Tee rather than plumb a log callback through every layer: the runner already
+                // says everything worth showing on stdout, and a window that shows less than the
+                // console is a window nobody trusts.
+                System.setOut(window.tee(System.out));
+                System.setErr(window.tee(System.err));
+            }
+
+            // With a window attached the exit code has no audience, and taking the process down
+            // closes the report someone opened the window to read.
+            boolean windowed = options.containsKey("gui");
 
             if (options.containsKey("selftest")) {
-                selfTest(instance, plan, outputDirectory, sceneRoot(options), options);
+                selfTest(
+                        instance,
+                        plan,
+                        outputDirectory,
+                        sceneRoot(instance),
+                        options,
+                        control,
+                        listener,
+                        windowed);
                 return;
             }
 
+            // A single run is a one-arm schedule as far as the window is concerned.
+            var arm =
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            "run", cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE, java.util.Set.of());
+            listener.scheduleBuilt(new ExperimentListener.Slate(List.of(arm), 1, 1, 1));
+            listener.runStarted(0, arm);
             RunResult result =
                     BenchmarkRun.execute(
                             instance,
                             plan,
                             outputDirectory,
-                            sceneRoot(options),
-                            Duration.ofSeconds(
-                                    Long.parseLong(options.getOrDefault("timeout", "900"))));
+                            sceneRoot(instance),
+                            timeout(options, plan),
+                            control,
+                            listener);
+            listener.runFinished(0, arm, 0, false);
+            listener.finished(null);
 
             BenchmarkRun.print(result);
             System.out.printf("%nresults written to %s%n", outputDirectory);
-            if (!result.complete()) {
+            if (!result.complete() && !windowed) {
                 // A partial run is not a successful run, and an unattended schedule chaining
                 // invocations has nothing to read but the exit code.
                 System.exit(2);
@@ -106,21 +135,120 @@ public final class Main {
     }
 
     /**
-     * Resolves the scenarios to run into a plan.
+     * Opens the planning window and runs whatever it is told to run.
      *
-     * <p>A {@code --config} file is the real path; the flags below build an equivalent one-scenario
-     * config when none is given, so a quick invocation stays a quick invocation. Either way the
-     * plan is produced by the same resolution, so what a flag means and what a config field means
-     * cannot drift apart.
+     * <p>The invocation with no arguments, which is what double-clicking the jar produces. Every
+     * choice the window offers has a flag equivalent, and both end at the same {@code
+     * ExperimentRun.execute} — so a run planned in the window is the run those flags describe.
+     */
+    private static void plannedRun() {
+        RunControl control = new RunControl();
+        var window =
+                cx.mia.lucent.laymark.runner.gui.RunnerWindow.open(
+                        control,
+                        (choice, runControl, listener) ->
+                                Thread.ofPlatform()
+                                        .name("laymark-experiment")
+                                        .start(() -> execute(choice, runControl, listener)));
+        System.setOut(window.tee(System.out));
+        System.setErr(window.tee(System.err));
+    }
+
+    /** One planned experiment: the chosen candidates, in the order the schedule asks for. */
+    private static void execute(
+            cx.mia.lucent.laymark.runner.gui.PlanningView.Choice choice,
+            RunControl control,
+            ExperimentListener listener) {
+        try {
+            listener.named(choice.displayNames());
+            String runId = LocalDateTime.now().format(RUN_ID);
+            Path outputDirectory =
+                    choice.instance()
+                            .gameDirectory()
+                            .resolve(Laymark.WORK_DIR)
+                            .resolve(runId)
+                            .toAbsolutePath();
+            RunPlan plan = plan(choice.instance(), runId, outputDirectory);
+
+            // The roster says it outright: baseline mods load in every arm, candidates load only in
+            // their own, and anything installed but named neither is withheld for the whole run.
+            var floor = choice.baseline();
+
+            var baseline =
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            "baseline",
+                            cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE,
+                            floor);
+            var acclimation =
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            "acclimation",
+                            cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
+                            floor);
+            // An arm enables the whole bundle: the candidate and the dependencies it carries. The
+            // bundle moves as one, because a candidate without a dependency it needs is not a
+            // smaller arm, it is an arm that does not start.
+            List<cx.mia.lucent.laymark.core.experiment.Arm> candidates =
+                    choice.candidates().entrySet().stream()
+                            .map(
+                                    entry -> {
+                                        var enabled = new java.util.TreeSet<>(floor);
+                                        enabled.addAll(entry.getValue());
+                                        return new cx.mia.lucent.laymark.core.experiment.Arm(
+                                                entry.getKey(),
+                                                cx.mia.lucent.laymark.core.experiment.Arm.Kind
+                                                        .CANDIDATE,
+                                                enabled);
+                                    })
+                            .toList();
+
+            var arms = choice.schedule().expand(candidates, baseline, acclimation, false);
+            System.out.printf(
+                    "schedule %s over %d candidate(s): %d arms%n",
+                    choice.schedule().template(), candidates.size(), arms.size());
+
+            ExperimentRun.execute(
+                    choice.instance(),
+                    plan,
+                    arms,
+                    // Baseline mods are participants too. Passing only the candidates would make
+                    // every arm enable mods it does not own, which materialisation rejects.
+                    choice.participants(),
+                    outputDirectory,
+                    sceneRoot(choice.instance()),
+                    // From the plan, not a constant. A fixed ceiling shorter than the captures it
+                    // contains kills the game part-way and reports the result as a hang.
+                    plan.timeout(),
+                    control,
+                    listener);
+            System.out.printf("%nreport written to %s%n", outputDirectory.resolve("report.md"));
+        } catch (Exception e) {
+            // On stdout with the trace, not a one-line stderr aside: this is the only account of
+            // why an experiment died, and it has to land in the window's log where the operator
+            // is actually looking.
+            System.out.println("\nthe experiment failed: " + e.getMessage());
+            e.printStackTrace(System.out);
+            listener.finished(null);
+        }
+    }
+
+    /**
+     * Resolves the instance's own config into this run's plan.
+     *
+     * <p>{@code config/laymark.json} <em>is</em> the plan: hand-authored, the single source of
+     * what a run measures, and read by runner and harness alike so the two sides cannot drift.
+     * There is no other place scenarios come from — no flag-built scenario, no browsed file —
+     * because a second source is a second thing the archived result could disagree with.
      *
      * <p>Laymark ships no scenarios of its own. What to measure is the operator's decision.
      */
-    private static RunPlan plan(String runId, Path outputDirectory, Map<String, String> options) {
-        ScenarioConfig config =
-                options.containsKey("config")
-                        ? readConfig(Path.of(options.get("config")))
-                        : configFromFlags(options);
-        return config.resolve(runId, outputDirectory.toString());
+    private static RunPlan plan(ModrinthInstance instance, String runId, Path outputDirectory) {
+        return readConfig(instance.gameDirectory().resolve(Laymark.CONFIG_PATH))
+                .resolve(runId, outputDirectory.toString());
+    }
+
+    /** Scene paths in the config resolve relative to the config's own directory. */
+    private static Path sceneRoot(ModrinthInstance instance) {
+        return instance.gameDirectory().resolve(Laymark.CONFIG_PATH).toAbsolutePath().getParent();
     }
 
     /**
@@ -136,16 +264,27 @@ public final class Main {
             RunPlan plan,
             Path outputDirectory,
             Path sceneRoot,
-            Map<String, String> options)
+            Map<String, String> options,
+            RunControl control,
+            ExperimentListener listener,
+            boolean windowed)
             throws java.io.IOException {
 
         var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(instance.gameDirectory());
         var installed = mods.read().enabledNames();
 
-        // Alternating B,C,B,C... where the "candidate" is byte-identical to the baseline. All
-        // baselines would compare nothing at all, which is a test that cannot fail.
+        // Acclimation first, then alternating B,C,B,C... where the "candidate" is byte-identical
+        // to the baseline. All baselines would compare nothing -- a test that cannot fail -- and
+        // skipping acclimation makes session warm-up read as a position effect: verified on a real
+        // run, where the control (always immediately after its baseline) measured 1.0% faster with
+        // an interval of 0.5% to 1.6%. The discarded warm-up run is what absorbs that.
         int arms = Integer.parseInt(options.getOrDefault("arms", "6"));
         List<cx.mia.lucent.laymark.core.experiment.Arm> runs = new java.util.ArrayList<>();
+        runs.add(
+                new cx.mia.lucent.laymark.core.experiment.Arm(
+                        "acclimation",
+                        cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
+                        installed));
         for (int i = 0; i < arms; i++) {
             boolean baseline = i % 2 == 0;
             runs.add(
@@ -165,12 +304,17 @@ public final class Main {
                         installed,
                         outputDirectory,
                         sceneRoot,
-                        Duration.ofSeconds(Long.parseLong(options.getOrDefault("timeout", "900"))));
+                        timeout(options, plan),
+                        control,
+                        listener);
 
         System.out.printf("%nself-test: %d runs, %d voided window(s)%n", arms, report.voids().size());
         if (report.comparisons().isEmpty()) {
             System.out.println("FAILED: nothing was compared, so nothing was tested");
-            System.exit(2);
+            if (!windowed) {
+                System.exit(2);
+            }
+            return;
         }
         boolean clean = true;
         for (var comparison : report.comparisons()) {
@@ -183,62 +327,36 @@ public final class Main {
                 clean
                         ? "PASSED: no identical run beat another"
                         : "FAILED: an identical run was reported as different");
-        if (!clean) {
+        if (!clean && !windowed) {
             System.exit(2);
         }
         System.out.printf("report written to %s%n", outputDirectory.resolve("report.md"));
     }
 
-    /** Scene paths are relative to the config that declared them, or to the working directory. */
-    private static Path sceneRoot(Map<String, String> options) {
-        Path config = options.containsKey("config") ? Path.of(options.get("config")) : null;
-        Path parent = config == null ? null : config.toAbsolutePath().getParent();
-        return parent == null ? Path.of("").toAbsolutePath() : parent;
+    /**
+     * How long to wait for one launch: what was asked for, or what the plan says it needs.
+     *
+     * <p>Derived by default rather than fixed, because a scenario already states its own ceiling
+     * and a shorter launch timeout would kill the game part-way and report the run as a hang.
+     */
+    private static Duration timeout(Map<String, String> options, RunPlan plan) {
+        String requested = options.get("timeout");
+        return requested == null || requested.isBlank()
+                ? plan.timeout()
+                : Duration.ofSeconds(Long.parseLong(requested));
     }
 
     private static ScenarioConfig readConfig(Path path) {
         if (!Files.isRegularFile(path)) {
-            throw new LaunchException("no scenario config at " + path);
+            throw new LaunchException(
+                    "no scenario config at " + path + "; it is hand-authored -- write your"
+                            + " scenarios there");
         }
         try {
             return ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new UncheckedIOException("could not read " + path, e);
         }
-    }
-
-    /** The one-scenario shape the flags describe. */
-    private static ScenarioConfig configFromFlags(Map<String, String> options) {
-        int renderDistance = Integer.parseInt(options.getOrDefault("render-distance", "12"));
-        Preset defaults = Preset.defaults();
-        Preset preset =
-                new Preset(
-                        renderDistance,
-                        renderDistance,
-                        defaults.framerateLimit(),
-                        defaults.vsync(),
-                        defaults.particles(),
-                        defaults.clouds(),
-                        defaults.entityShadows(),
-                        defaults.biomeBlendRadius(),
-                        defaults.fieldOfView());
-
-        long captureMillis =
-                Duration.ofSeconds(Long.parseLong(options.getOrDefault("duration", "30")))
-                        .toMillis();
-
-        return ScenarioConfig.of(
-                new ScenarioDefinition(
-                        "resident-render",
-                        List.of(),
-                        List.of(Phase.RESIDENT_RENDER),
-                        StopSpec.of(StopCondition.Kind.TIME, captureMillis, 0),
-                        Integer.parseInt(options.getOrDefault("repetitions", "1")),
-                        PresetRef.inline(preset),
-                        Pose.lookingDown(0.5, OBSERVATION_ALTITUDE, 0.5),
-                        Long.parseLong(options.getOrDefault("seed", "1")),
-                        false,
-                        List.of()));
     }
 
     private static String required(Map<String, String> options, String name) {
@@ -274,19 +392,20 @@ public final class Main {
                 """
                 laymark runner (protocol v%d)
 
-                Runs one scenario in a disposable world and reports its frame-time distribution.
+                Runs the instance's scenario config and reports what it measured.
 
-                  --config <path>         scenario config to run; without it the flags below
-                          describe a single resident-render scenario
-  --profile <name>        Modrinth App profile directory name (required)
+                Scenarios come from one place: <instance>/config/laymark.json, hand-authored.
+                Results and working state go to <instance>/.laymark/.
+
+                With no arguments at all, opens the planning window.
+
+                  --profile <name>        Modrinth App profile directory name (required)
                   --version <id>          version id, e.g. 26.1.2-26.1.2.95 (required)
                   --root <path>           Modrinth App data directory (default: platform location)
-                  --out <path>            results root (default: benchmark-results)
-                  --seed <n>              world seed (default 1)
-                  --duration <seconds>    capture window (default 30)
-                  --repetitions <n>       repeats, each in a fresh world (default 1)
-                  --render-distance <n>   chunks, also used as simulation distance (default 12)
-                  --timeout <seconds>     how long to wait for the run (default 900)
+                  --out <path>            results root (default: <instance>/.laymark)
+                  --timeout <seconds>     how long to wait for the run; by default derived from
+                          the scenarios' own stop timeouts plus a launch allowance
+  --gui                   open a window with status, schedule, and pause/stop
   --selftest              run N identical baselines and check none beats another
   --arms <n>              how many baselines the self-test uses (default 4)
                 %n""",

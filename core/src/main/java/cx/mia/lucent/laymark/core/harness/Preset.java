@@ -20,24 +20,29 @@ package cx.mia.lucent.laymark.core.harness;
  *
  * @param renderDistance chunks
  * @param simulationDistance chunks
- * @param framerateLimit frames per second; {@link #UNLIMITED_FRAMERATE} to uncap
- * @param vsync must normally be off — vsync clamps frame time to the display's refresh interval,
- *     which censors exactly the differences a benchmark exists to find
  * @param fieldOfView degrees; pinned because it decides how much geometry is on screen
  */
 public record Preset(
         int renderDistance,
         int simulationDistance,
-        int framerateLimit,
-        boolean vsync,
         ParticleDetail particles,
         CloudDetail clouds,
         boolean entityShadows,
         int biomeBlendRadius,
         int fieldOfView) {
 
-    /** Vanilla's framerate slider treats its maximum as uncapped. */
+    /**
+     * Vanilla's framerate slider treats its maximum as uncapped.
+     *
+     * <p>Not a field on a preset. A framerate cap and vsync are <strong>mandatory,
+     * non-configurable overrides</strong>: either one clamps frame time to something other than
+     * the work being measured, which is exactly the difference a benchmark exists to find. A
+     * config that could set them could quietly censor its own results.
+     */
     public static final int UNLIMITED_FRAMERATE = 260;
+
+    /** Vsync is forced off for the same reason, and likewise cannot be configured. */
+    public static final boolean VSYNC = false;
 
     public enum ParticleDetail {
         ALL,
@@ -54,7 +59,6 @@ public record Preset(
     public Preset {
         requireRange("renderDistance", renderDistance, 2, 32);
         requireRange("simulationDistance", simulationDistance, 5, 32);
-        requireRange("framerateLimit", framerateLimit, 10, UNLIMITED_FRAMERATE);
         requireRange("biomeBlendRadius", biomeBlendRadius, 0, 7);
         requireRange("fieldOfView", fieldOfView, 30, 110);
         if (particles == null || clouds == null) {
@@ -77,8 +81,6 @@ public record Preset(
         return new Preset(
                 12,
                 12,
-                UNLIMITED_FRAMERATE,
-                false,
                 ParticleDetail.ALL,
                 CloudDetail.FANCY,
                 true,

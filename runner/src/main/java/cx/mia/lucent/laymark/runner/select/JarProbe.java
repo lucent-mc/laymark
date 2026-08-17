@@ -46,7 +46,29 @@ public final class JarProbe {
      * because one exists would make the benchmark unusable on real packs.
      */
     public static DependencyGraph probe(List<Path> jars) {
+        return inspect(jars).graph();
+    }
+
+    /**
+     * The graph, plus which file each mod id came out of and what the mod calls itself.
+     *
+     * <p>Edges are between mod ids because that is how a jar declares what it needs, but everything
+     * an operator touches is a file name, and everything an operator <em>reads</em> should be the
+     * mod's own display name — "Sodium", not {@code sodium-neoforge-0.9.2-alpha.4+mc26.1.2}.
+     * Something has to hold all three, and it is the pass that already opened every jar.
+     *
+     * @param modIdByFile keyed by file name; a jar declaring no readable manifest is absent
+     * @param displayNameByFile the manifest's display name; absent when the manifest names none
+     */
+    public record Probed(
+            DependencyGraph graph,
+            Map<String, String> modIdByFile,
+            Map<String, String> displayNameByFile) {}
+
+    public static Probed inspect(List<Path> jars) {
         Map<String, Set<String>> requires = new LinkedHashMap<>();
+        Map<String, String> modIdByFile = new LinkedHashMap<>();
+        Map<String, String> displayNameByFile = new LinkedHashMap<>();
 
         for (Path jar : jars) {
             try (ZipFile zip = new ZipFile(jar.toFile())) {
@@ -55,15 +77,23 @@ public final class JarProbe {
                     requires
                             .computeIfAbsent(declaration.modId(), unused -> new TreeSet<>())
                             .addAll(declaration.requires());
+                    modIdByFile.put(jar.getFileName().toString(), declaration.modId());
+                    if (declaration.displayName() != null) {
+                        displayNameByFile.put(
+                                jar.getFileName().toString(), declaration.displayName());
+                    }
                 }
             } catch (IOException e) {
                 throw new LaunchException("could not read " + jar, e);
             }
         }
-        return DependencyGraph.from(requires, DependencyGraph.Provenance.JAR_METADATA);
+        return new Probed(
+                DependencyGraph.from(requires, DependencyGraph.Provenance.JAR_METADATA),
+                modIdByFile,
+                displayNameByFile);
     }
 
-    private record Declaration(String modId, Set<String> requires) {}
+    private record Declaration(String modId, Set<String> requires, String displayName) {}
 
     private static Declaration read(ZipFile zip, Path jar) throws IOException {
         ZipEntry fabric = zip.getEntry(FABRIC_MANIFEST);
@@ -101,7 +131,7 @@ public final class JarProbe {
         // Fabric's built-ins are always present and are not mods anyone can toggle, so an edge to
         // one would only ever make a bundle look larger than it is.
         requires.removeAll(Set.of("fabricloader", "minecraft", "java"));
-        return new Declaration(modId, requires);
+        return new Declaration(modId, requires, string(root, "name"));
     }
 
     /**
@@ -115,6 +145,7 @@ public final class JarProbe {
      */
     private static Declaration neoforge(String toml) {
         String modId = null;
+        String displayName = null;
         Set<String> requires = new LinkedHashSet<>();
 
         boolean inDependencies = false;
@@ -149,6 +180,11 @@ public final class JarProbe {
                 }
                 continue;
             }
+            String name = value(line, "displayName");
+            if (name != null && !inDependencies && displayName == null) {
+                displayName = name;
+                continue;
+            }
             String type = value(line, "type");
             if (type != null && inDependencies) {
                 pendingRequired = "required".equalsIgnoreCase(type);
@@ -160,7 +196,7 @@ public final class JarProbe {
             return null;
         }
         requires.removeAll(Set.of("neoforge", "minecraft", "java"));
-        return new Declaration(modId, requires);
+        return new Declaration(modId, requires, displayName);
     }
 
     /** Only required dependencies form edges; an optional one does not have to be present. */

@@ -71,6 +71,29 @@ public record DependencyGraph(Map<String, Set<String>> requires, Map<Edge, Prove
         return seen;
     }
 
+    /**
+     * Everything that would break if {@code mod} were removed, transitively.
+     *
+     * <p>The mirror of {@link #closureOf}, and the one that matters when withholding a mod: taking
+     * a library out without taking its dependents out does not produce a smaller stack, it produces
+     * a stack that does not load.
+     */
+    public Set<String> dependentsOf(String mod) {
+        Set<String> seen = new LinkedHashSet<>();
+        Deque<String> pending = new ArrayDeque<>();
+        pending.add(mod);
+        while (!pending.isEmpty()) {
+            String next = pending.removeFirst();
+            requires.forEach(
+                    (candidate, needs) -> {
+                        if (needs.contains(next) && !candidate.equals(mod) && seen.add(candidate)) {
+                            pending.add(candidate);
+                        }
+                    });
+        }
+        return seen;
+    }
+
     /** @return null when the edge is not in the graph */
     public Provenance provenanceOf(String from, String to) {
         return provenance.get(new Edge(from, to));

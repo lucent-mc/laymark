@@ -167,7 +167,7 @@ public record Comparison(
     }
 
     public String describe() {
-        return String.format(
+        return String.format(java.util.Locale.ROOT, 
                 "%s: %.1f%% (interval %.1f%% to %.1f%%, n=%d)",
                 band, improvementPercent(), -highPercent, -lowPercent, pairs);
     }

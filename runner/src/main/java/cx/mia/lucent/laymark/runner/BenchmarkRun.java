@@ -53,7 +53,9 @@ public final class BenchmarkRun {
             RunPlan plan,
             Path outputDirectory,
             Path sceneRoot,
-            Duration timeout)
+            Duration timeout,
+            RunControl control,
+            ExperimentListener listener)
             throws IOException {
 
         instance.requireUsable();
@@ -63,7 +65,7 @@ public final class BenchmarkRun {
         Path stdout = outputDirectory.resolve("game-stdout.log");
         Path stderr = outputDirectory.resolve("game-stderr.log");
 
-        writePlan(instance, plan);
+        requireConfig(instance);
         stageScenes(instance, plan, sceneRoot);
 
         // Bind before launching. The port then exists before anything could connect to it, so
@@ -77,7 +79,9 @@ public final class BenchmarkRun {
                             HostPlatform.current(),
                             OfflineIdentity.of("LaymarkProbe"),
                             server.port(),
-                            server.token());
+                            server.token(),
+                            plan.runId(),
+                            plan.outputDirectory());
 
             System.out.printf(
                     "listening on 127.0.0.1:%d%nrunning %d scenario(s) from plan %s%n",
@@ -87,13 +91,18 @@ public final class BenchmarkRun {
                     GameProcess.start(
                             instance.javaExecutable(), argv, instance.gameDirectory(), stdout, stderr)) {
 
+                // While this game lives, a stop kills it rather than waiting for the boundary.
+                control.registerAbort(() -> game.terminate(Duration.ofSeconds(5)));
+
                 HarnessServer.Session session = handshake(server, game, timeout, stdout, stderr);
                 System.out.printf("handshake ok from pid %d; the run has started%n", session.pid());
 
-                return collect(server, session, game, outputDirectory, timeout);
+                return collect(server, session, game, outputDirectory, timeout, listener, plan);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new LaunchException("interrupted during the run", e);
+            } finally {
+                control.clearAbort();
             }
         }
     }
@@ -122,7 +131,9 @@ public final class BenchmarkRun {
             HarnessServer.Session session,
             GameProcess game,
             Path outputDirectory,
-            Duration timeout)
+            Duration timeout,
+            ExperimentListener listener,
+            RunPlan plan)
             throws IOException, InterruptedException {
 
         AtomicReference<Frame> terminal = new AtomicReference<>();
@@ -137,6 +148,10 @@ public final class BenchmarkRun {
                                                 session,
                                                 frame -> {
                                                     describe(frame);
+                                                    if (frame instanceof Frame.ScenarioStarted started) {
+                                                        listener.scenarioStarted(
+                                                                started.scenarioId(), started.repetition());
+                                                    }
                                                     if (frame instanceof Frame.RunFinished
                                                             || frame instanceof Frame.RunFailed) {
                                                         terminal.set(frame);
@@ -167,27 +182,39 @@ public final class BenchmarkRun {
             throw new LaunchException("the run failed: " + failed.reason() + ": " + failed.detail());
         }
 
-        return readResult(((Frame.RunFinished) outcome).resultPath());
+        return readResult(((Frame.RunFinished) outcome).resultPath(), plan);
     }
 
-    private static RunResult readResult(String path) throws IOException {
+    private static RunResult readResult(String path, RunPlan plan) throws IOException {
         Path resultPath = Path.of(path);
         if (!Files.isRegularFile(resultPath)) {
             throw new LaunchException("the harness reported a result at " + path + " that is not there");
         }
-        return ResultCodec.read(Files.readString(resultPath, StandardCharsets.UTF_8));
+        RunResult result = ResultCodec.read(Files.readString(resultPath, StandardCharsets.UTF_8));
+        // The one check that catches a stale mod build. A harness from before a protocol-compatible
+        // change happily runs whatever it knows how to read -- observed running a leftover plan
+        // file from a previous run -- and everything downstream then scores the wrong scenarios.
+        if (!plan.runId().equals(result.runId())) {
+            throw new LaunchException(
+                    "the game executed run " + result.runId() + " but this launch is "
+                            + plan.runId() + "; the Laymark mod in the instance is a stale build"
+                            + " running something it found on disk -- update mods/laymark-*.jar");
+        }
+        return result;
     }
 
     /**
-     * Writes the plan into the instance so the harness can find it.
+     * Confirms the config the harness will read is there, before paying for a launch.
      *
-     * <p>The one place the runner writes inside the instance. It is Laymark's own config
-     * directory, and it is overwritten every run.
+     * <p>The runner never writes it. {@code config/laymark.json} is hand-authored and both sides
+     * resolve the same document, so there is no plan file to stage and nothing to drift.
      */
-    private static void writePlan(ModrinthInstance instance, RunPlan plan) throws IOException {
-        Path path = instance.gameDirectory().resolve(Laymark.PLAN_PATH);
-        Files.createDirectories(path.getParent());
-        Files.writeString(path, PlanCodec.write(plan), StandardCharsets.UTF_8);
+    private static void requireConfig(ModrinthInstance instance) {
+        if (!Files.isRegularFile(instance.gameDirectory().resolve(Laymark.CONFIG_PATH))) {
+            throw new LaunchException(
+                    "no scenario config at " + instance.gameDirectory().resolve(Laymark.CONFIG_PATH)
+                            + "; it is hand-authored and the harness reads it from there");
+        }
     }
 
     /**

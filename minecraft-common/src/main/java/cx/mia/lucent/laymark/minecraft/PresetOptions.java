@@ -28,6 +28,16 @@ public final class PresetOptions {
 
     private PresetOptions() {}
 
+    /** Fixed and non-configurable; see the window note in {@link #apply}. */
+    private static final int WINDOW_WIDTH = cx.mia.lucent.laymark.core.Laymark.WINDOW_WIDTH;
+
+    private static final int WINDOW_HEIGHT = cx.mia.lucent.laymark.core.Laymark.WINDOW_HEIGHT;
+
+    /** Clear of the top edge so the title bar stays grabbable. */
+    private static final int WINDOW_X = 0;
+
+    private static final int WINDOW_Y = 40;
+
     /**
      * Applies every setting, unconditionally.
      *
@@ -43,13 +53,26 @@ public final class PresetOptions {
 
         set(options.renderDistance(), preset.renderDistance(), "renderDistance");
         set(options.simulationDistance(), preset.simulationDistance(), "simulationDistance");
-        set(options.framerateLimit(), preset.framerateLimit(), "framerateLimit");
-        set(options.enableVsync(), preset.vsync(), "vsync");
+        // Mandatory overrides, not preset fields. A cap or vsync clamps frame time to something
+        // other than the work being measured.
+        set(options.framerateLimit(), Preset.UNLIMITED_FRAMERATE, "framerateLimit");
+        set(options.enableVsync(), Preset.VSYNC, "vsync");
         set(options.particles(), particleStatus(preset.particles()), "particles");
         set(options.cloudStatus(), cloudStatus(preset.clouds()), "clouds");
         set(options.entityShadows(), preset.entityShadows(), "entityShadows");
         set(options.biomeBlendRadius(), preset.biomeBlendRadius(), "biomeBlendRadius");
         set(options.fov(), preset.fieldOfView(), "fieldOfView");
+
+        // Windowed at a fixed size. A smaller window is less GPU-bound, so CPU-side differences
+        // show more clearly -- and a window that varied with whatever the instance last used would
+        // make two machines, or two runs, incomparable for a reason nobody recorded.
+        options.fullscreen().set(false);
+        Minecraft.getInstance().getWindow().setWindowed(WINDOW_WIDTH, WINDOW_HEIGHT);
+        // Pinned to the top-left corner, not just to a size. A deterministic position lets the
+        // runner's own window dock beside the game instead of underneath it, and where the window
+        // sits is as much session state as how big it is.
+        org.lwjgl.glfw.GLFW.glfwSetWindowPos(
+                Minecraft.getInstance().getWindow().handle(), WINDOW_X, WINDOW_Y);
 
         // A scripted camera generates no GLFW input, and vanilla reads that as an idle player: at
         // the default AFK setting the framerate is capped to 30 after a minute and 10 after ten.
@@ -79,8 +102,6 @@ public final class PresetOptions {
                 new Preset(
                         options.getEffectiveRenderDistance(),
                         options.simulationDistance().get(),
-                        options.framerateLimit().get(),
-                        requested.vsync(),
                         particleDetail(options.particles().get()),
                         cloudDetail(options.cloudStatus().get()),
                         options.entityShadows().get(),

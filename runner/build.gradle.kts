@@ -7,7 +7,43 @@ description = "Desktop runner: launch assembly, process ownership, materializati
 
 dependencies {
     implementation(project(":core"))
+    // The only third-party dependency the runner has, and it is a Swing look-and-feel: still no
+    // toolkit, still one jar, still nothing loaded into the measured JVM. Hand-rolling a dark theme
+    // means restyling every scroll bar and check box by hand to arrive somewhere worse.
+    implementation(libs.flatlaf)
 }
+
+// The artifact §3 describes: one file, `java -jar`, no start script and no lib directory. It is
+// also what makes the planning window reachable by double-clicking, so it is built by `assemble`
+// rather than on request.
+val runnerJar =
+    tasks.register<Jar>("runnerJar") {
+        archiveBaseName = "laymark-runner"
+        archiveClassifier = ""
+        manifest {
+            attributes(
+                "Main-Class" to "cx.mia.lucent.laymark.runner.Main",
+                "Implementation-Version" to project.version,
+                // FlatLaf loads a native library for window decorations. Declared here so the JVM
+                // permits it silently instead of printing four warnings above the run's output.
+                "Enable-Native-Access" to "ALL-UNNAMED",
+            )
+        }
+        from(sourceSets.main.get().output)
+        // Declared, not just read: unpacking inside a `from {}` closure hides the dependency, and
+        // the jar silently packages whatever ':core:jar' was last built -- which is how a stale
+        // core ends up shipped beside freshly built runner classes.
+        dependsOn(configurations.runtimeClasspath)
+        from({
+            configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) }
+        })
+        // Dependency signatures do not survive being unpacked into another jar, and a stale one
+        // makes the JVM refuse to load the classes beside it.
+        exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "module-info.class")
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    }
+
+tasks.named("assemble") { dependsOn(runnerJar) }
 
 // The runner assembles launch commands for a mod loader, so loader names appear throughout its
 // data: a descriptor's mainClass, and library paths like net/neoforged/neoforge/...-universal.jar.

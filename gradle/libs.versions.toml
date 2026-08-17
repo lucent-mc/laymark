@@ -23,8 +23,13 @@ junit = "5.14.0"
 # would mean bundling one into the process being benchmarked.
 gson = "2.13.2"
 
+# The runner's only third-party dependency beyond Gson, and it is a Swing look-and-feel: no
+# toolkit, and nothing that could reach the measured process.
+flatlaf = "3.6"
+
 [libraries]
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
 spark-api = { module = "me.lucko:spark-api", version.ref = "sparkApi" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }

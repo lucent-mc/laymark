@@ -38,23 +38,50 @@ public final class Laymark {
     public static final String PROPERTY_TOKEN = "laymark.token";
 
     /**
-     * Where the runner leaves the plan, relative to the instance's game directory.
+     * The scenario config, relative to the instance's game directory.
      *
-     * <p>A file rather than a socket message: documents on disk, events on the wire. The plan has
-     * to be archived alongside the results for a historical run to stay interpretable, and a file
-     * can be read by a human diagnosing a launch that never got as far as connecting.
+     * <p><strong>Hand-authored, and the single source of what a run measures.</strong> The runner
+     * never writes it. Both sides resolve the same document — the runner for scheduling and the
+     * harness for execution — so there is no separate plan file to drift from it; the resolved
+     * plan is archived beside the results, never inside the instance.
      */
-    public static final String PLAN_PATH = "config/laymark/plan.json";
+    public static final String CONFIG_PATH = "config/laymark.json";
+
+    /**
+     * Laymark's working directory inside the instance: cache and measurements, never configuration.
+     *
+     * <p>Dot-prefixed so launchers, pack tooling and Inlay reconciliation all read it as internal
+     * state rather than content someone authored.
+     */
+    public static final String WORK_DIR = ".laymark";
 
     /**
      * Where scene files are staged inside the instance, relative to the game directory.
      *
-     * <p>A config and its schematics live wherever the operator keeps them; the harness reads them
-     * from inside the game. The runner copies them here so the plan can reference a scene by the
-     * name the harness will find, rather than by a path that only existed on the machine that
-     * wrote the config.
+     * <p>A config's schematics live wherever the operator keeps them; the harness reads them from
+     * inside the game. The runner copies them here so the plan can reference a scene by the name
+     * the harness will find, rather than by a path that only existed on the machine that wrote the
+     * config.
      */
-    public static final String SCENE_DIR = "config/laymark/scenes";
+    public static final String SCENE_DIR = WORK_DIR + "/scenes";
+
+    /**
+     * The measured window, one size everywhere it is mentioned.
+     *
+     * <p>Passed as {@code --width}/{@code --height} so the game opens at this size, and enforced
+     * again by the preset so a mod resizing mid-session is caught. Opening at the wrong size and
+     * snapping to the right one wastes a visible resize and leaves the first seconds of the
+     * session under a size nobody asked for.
+     */
+    public static final int WINDOW_WIDTH = 1600;
+
+    public static final int WINDOW_HEIGHT = 900;
+
+    /** The run id the harness resolves the config under, passed on the launch command line. */
+    public static final String PROPERTY_RUN_ID = "laymark.run";
+
+    /** Where the harness writes its result, passed the same way. */
+    public static final String PROPERTY_OUTPUT = "laymark.out";
 
     /** Result document name, written inside the plan's output directory. */
     public static final String RESULT_FILE = "result.json";

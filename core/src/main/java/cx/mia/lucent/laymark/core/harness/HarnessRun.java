@@ -11,7 +11,11 @@ import cx.mia.lucent.laymark.core.result.PhaseResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -58,22 +62,74 @@ public final class HarnessRun {
      * already succeeded and biases whatever is left toward the arms that had no trouble.
      */
     public RunResult execute() {
+        List<ScenarioSpec> order = plan.executionOrder();
+        WorldLeases leases = WorldLeases.of(order);
         List<ScenarioResult> results = new ArrayList<>();
-        for (ScenarioSpec scenario : plan.executionOrder()) {
+        Map<String, Set<Integer>> failedRepetitions = new HashMap<>();
+
+        for (ScenarioSpec scenario : order) {
             for (int repetition = 1; repetition <= scenario.repetitions(); repetition++) {
-                results.add(runRepetition(scenario, repetition));
+                // A dependency that failed leaves a world that is partly what the config describes
+                // and partly whatever the failure left behind. Measured on a real run: generation
+                // timed out, and the streaming scenario depending on it passed its pose-local
+                // preconditions and spent its capture half loading terrain, half generating the
+                // rest -- a plausible number for work the scenario does not claim to measure.
+                String failedDependency = failedDependency(scenario, repetition, failedRepetitions);
+                ScenarioResult result;
+                if (failedDependency != null) {
+                    String reason =
+                            "dependency " + failedDependency + " did not complete, so the world"
+                                    + " this scenario measures in is not the one its config"
+                                    + " describes";
+                    events.accept(new Frame.ScenarioStarted(scenario.id(), repetition));
+                    events.accept(new Frame.ScenarioFinished(scenario.id(), false, reason));
+                    result = ScenarioResult.failed(scenario.id(), repetition, reason);
+                    // The lease is still released; the world is no more useful to anyone else.
+                    if (leases.release(scenario.id(), repetition)) {
+                        discard(
+                                WorldSpec.forRepetition(
+                                        plan.runId(),
+                                        leases.ownerOf(scenario.id()),
+                                        repetition,
+                                        scenario.seed()));
+                    }
+                } else {
+                    result = runRepetition(scenario, repetition, leases);
+                }
+                if (result.outcome() == ScenarioResult.Outcome.FAILED) {
+                    failedRepetitions
+                            .computeIfAbsent(scenario.id(), unused -> new HashSet<>())
+                            .add(repetition);
+                }
+                results.add(result);
             }
         }
         return new RunResult(plan.runId(), Laymark.PROTOCOL_VERSION, results, runFlags);
     }
 
-    private ScenarioResult runRepetition(ScenarioSpec scenario, int repetition) {
+    /** The direct dependency whose same-numbered repetition failed, or null when all held. */
+    private static String failedDependency(
+            ScenarioSpec scenario, int repetition, Map<String, Set<Integer>> failed) {
+        for (String dependency : scenario.dependsOn()) {
+            if (failed.getOrDefault(dependency, Set.of()).contains(repetition)) {
+                return dependency;
+            }
+        }
+        return null;
+    }
+
+    private ScenarioResult runRepetition(
+            ScenarioSpec scenario, int repetition, WorldLeases leases) {
+
         events.accept(new Frame.ScenarioStarted(scenario.id(), repetition));
+        String owner = leases.ownerOf(scenario.id());
         WorldSpec world =
-                WorldSpec.forRepetition(plan.runId(), scenario.id(), repetition, scenario.seed());
+                WorldSpec.forRepetition(plan.runId(), owner, repetition, scenario.seed());
+        boolean owns = owner.equals(scenario.id());
         long startedAt = System.nanoTime();
+
         try {
-            ScenarioResult result = measure(scenario, repetition, world, startedAt);
+            ScenarioResult result = measure(scenario, repetition, world, owns, startedAt);
             events.accept(
                     new Frame.ScenarioFinished(
                             scenario.id(),
@@ -84,14 +140,22 @@ public final class HarnessRun {
             events.accept(new Frame.ScenarioFinished(scenario.id(), false, e.getMessage()));
             return ScenarioResult.failed(scenario.id(), repetition, e.getMessage());
         } finally {
-            // Unconditional. A save left behind holds a lock that stops the next repetition from
-            // creating its own, so a single failure would cascade into every later scenario.
-            discard(world);
+            // The world always closes; whether it is deleted depends on who still needs it. A save
+            // left open holds a lock that stops the next scenario from opening anything, so a
+            // single failure would otherwise cascade through the rest of the run.
+            close();
+            if (leases.release(scenario.id(), repetition)) {
+                discard(world);
+            }
         }
     }
 
     private ScenarioResult measure(
-            ScenarioSpec scenario, int repetition, WorldSpec world, long startedAt) {
+            ScenarioSpec scenario,
+            int repetition,
+            WorldSpec world,
+            boolean createsWorld,
+            long startedAt) {
         List<PhaseResult> segments = new ArrayList<>();
 
         // Settings first. Render distance decides how much work world load itself does, so
@@ -102,6 +166,13 @@ public final class HarnessRun {
         // cost mods target is the creation itself, and a window opened once the world exists has
         // already missed it. Its end is the barrier, not a target anyone configures.
         boolean measuringSpawn = scenario.measure().contains(Phase.SPAWN_GENERATION);
+        if (measuringSpawn && !createsWorld) {
+            // Spawn generation is world creation. A scenario reusing a world has none to measure,
+            // and capturing the reopen instead would report a load as a generation.
+            throw new HarnessException(
+                    "scenario " + scenario.id() + " measures spawn generation but reuses "
+                            + world.levelId() + ", which is already generated");
+        }
         long spawnStartedAt = System.nanoTime();
         if (measuringSpawn) {
             events.accept(
@@ -109,8 +180,13 @@ public final class HarnessRun {
             port.beginCapture();
         }
 
-        port.createWorld(world);
+        if (createsWorld) {
+            port.createWorld(world);
+        } else {
+            port.openWorld(world);
+        }
         BarrierReport barrier = port.awaitReady(READY_TIMEOUT);
+        port.pinGameRules();
 
         if (measuringSpawn) {
             Measurement spawn = port.endCapture();
@@ -127,31 +203,39 @@ public final class HarnessRun {
             // what there is to build, so a barrier satisfied beforehand says nothing about after.
             port.placeContent(scenario.content());
         }
-        port.position(scenario.pose());
 
         // After applying and loading, not before: the world load runs arbitrary mod code, and a
         // mod that reverts a setting does it there rather than during the setter call.
         PresetReadback readback = port.readPreset(scenario.preset());
-        List<String> flags = new ArrayList<>(readback.deviationsFrom(scenario.preset()));
+        requireSettingsHeld(scenario, readback, "after the world loaded");
+        List<String> flags = new ArrayList<>();
 
         for (Phase phase : scenario.measure()) {
             if (phase == Phase.SPAWN_GENERATION) {
                 continue; // already captured, around world creation
             }
-            requireNegativePrecondition(scenario, phase);
-
             long phaseStartedAt = System.nanoTime();
-            events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
-            Measurement measurement = port.capture(scenario.stopCondition());
+            Measurement measurement =
+                    phase == Phase.UNGENERATED_TRAVERSAL
+                            ? traverse(scenario, phaseStartedAt)
+                            : residentAt(scenario, phase, phaseStartedAt);
+
             if (!measurement.measured()) {
                 throw new HarnessException(
                         "scenario " + scenario.id() + " captured no frames for " + phase);
             }
+            // Re-read after the capture, not only before it. Preset verification is a runtime
+            // invariant, because the mods being measured are exactly the population that rewrites
+            // rendering settings -- a value reverted mid-capture produces a full set of samples
+            // taken under settings nobody asked for.
+            requireSettingsHeld(scenario, port.readPreset(scenario.preset()), "during " + phase);
+            requireNotThrottled(scenario, phase, measurement);
+
             segments.add(
                     new PhaseResult(
                             phase,
                             measurement,
-                            throttleFlags(measurement),
+                            List.of(),
                             Duration.ofNanos(System.nanoTime() - phaseStartedAt).toMillis()));
         }
 
@@ -166,25 +250,64 @@ public final class HarnessRun {
     }
 
     /**
-     * Fails the repetition if the work being measured has already happened.
+     * Measures the traversal into ungenerated terrain.
      *
-     * <p>Two of the four phases have this hazard, and it is the most dangerous failure mode in the
-     * whole harness: a traversal whose target was already generated, or a streaming phase whose
-     * sections are already meshed, <strong>completes normally and reports flatteringly good
-     * numbers</strong>. There is nothing in the output to distinguish it from a genuinely fast
-     * stack, so it fails the repetition rather than flagging it.
+     * <p>The precondition is checked <strong>before the player moves</strong>, because moving is
+     * what generates the target. Checking afterwards asks whether the thing just generated was
+     * ungenerated, which it never is — the phase could not pass its own precondition.
+     *
+     * <p>The window opens, then the teleport happens, then the wait. That ordering is the phase:
+     * the arrival is the measured event, so a capture that started after the player had already
+     * settled would report the cost of standing still.
      */
-    private void requireNegativePrecondition(ScenarioSpec scenario, Phase phase) {
+    private Measurement traverse(ScenarioSpec scenario, long phaseStartedAt) {
+        if (!port.targetIsUngenerated(scenario.pose())) {
+            throw new HarnessException(
+                    "scenario " + scenario.id()
+                            + " measures generation, but its target was already generated;"
+                            + " measuring it would report a cost that was already paid");
+        }
+        events.accept(
+                new Frame.PhaseEntered(
+                        scenario.id(), Phase.UNGENERATED_TRAVERSAL, phaseStartedAt));
+
+        port.beginCapture();
+        port.teleport(scenario.pose());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        return port.endCapture();
+    }
+
+    /** The phases that measure a settled state, where positioning is setup rather than the event. */
+    private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
+        port.position(scenario.pose());
+        requirePreconditions(scenario, phase);
+        events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
+        return port.capture(
+                scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+    }
+
+    /**
+     * Fails the repetition unless the phase is measuring what it claims to.
+     *
+     * <p>Two of the four phases carry the most dangerous failure mode in the harness: a traversal
+     * whose target was already generated, or a streaming phase whose sections are already meshed,
+     * <strong>completes normally and reports flatteringly good numbers</strong>. Nothing in the
+     * output distinguishes that from a genuinely fast stack, so it fails rather than flags.
+     */
+    private void requirePreconditions(ScenarioSpec scenario, Phase phase) {
         switch (phase) {
-            case UNGENERATED_TRAVERSAL -> {
-                if (!port.targetIsUngenerated(scenario.pose())) {
+            // Traversal checks its own, before the player moves -- see traverse().
+            case UNGENERATED_TRAVERSAL -> {}
+            case GENERATED_STREAMING -> {
+                // Positive: the terrain must already exist, or this times generation and calls it
+                // streaming -- the same number under the wrong name, and far the larger one.
+                if (port.targetIsUngenerated(scenario.pose())) {
                     throw new HarnessException(
                             "scenario " + scenario.id()
-                                    + " measures generation, but its target was already generated;"
-                                    + " measuring it would report a cost that was already paid");
+                                    + " measures streaming from disk, but its target has never been"
+                                    + " generated; it needs dependsOn a scenario that generates it");
                 }
-            }
-            case GENERATED_STREAMING -> {
+                // Negative: the client must not already hold the meshes.
                 if (!port.targetHasNoBuiltSections(scenario.pose())) {
                     throw new HarnessException(
                             "scenario " + scenario.id()
@@ -192,10 +315,49 @@ public final class HarnessRun {
                                     + " meshed; the work it exists to time has already happened");
                 }
             }
-            // Spawn generation is guaranteed fresh by construction -- every repetition creates its
-            // own save -- and resident render is the one phase where "already finished" is the
-            // point rather than a hazard.
+            // Spawn generation is guaranteed fresh by construction -- a scenario measuring it
+            // creates its own save -- and resident render is the one phase where "already
+            // finished" is the point rather than a hazard.
             case SPAWN_GENERATION, RESIDENT_RENDER -> {}
+        }
+    }
+
+    /**
+     * Fails when a setting Laymark set has since drifted.
+     *
+     * <p>Hard, not a flag. This is the tier the spec fails closed on: anything Laymark can both set
+     * and verify, that then changes, invalidates the run outright. Recording it and carrying on
+     * would produce a comparison between two different configurations wearing one config's name.
+     */
+    private static void requireSettingsHeld(
+            ScenarioSpec scenario, PresetReadback readback, String when) {
+        List<String> deviations = readback.deviationsFrom(scenario.preset());
+        if (!deviations.isEmpty()) {
+            throw new HarnessException(
+                    "scenario " + scenario.id() + ": settings drifted " + when + " -- "
+                            + String.join("; ", deviations));
+        }
+    }
+
+    /**
+     * Fails when the framerate was held back at any point in a capture.
+     *
+     * <p>Also hard. A window that begins throttled is refused by the port; this catches the one
+     * that starts clean and is capped partway through, which leaves a distribution with an
+     * artificial ceiling in the middle of otherwise real samples.
+     */
+    private static void requireNotThrottled(
+            ScenarioSpec scenario, Phase phase, Measurement measurement) {
+        List<Throttle> throttles =
+                measurement.throttlesObserved().stream()
+                        .filter(throttle -> throttle != Throttle.NONE)
+                        .toList();
+        // Spawn generation is capped by vanilla whenever no level is loaded and a screen is up,
+        // which is precisely what world creation is. Failing on it would fail every such capture.
+        if (!throttles.isEmpty() && phase != Phase.SPAWN_GENERATION) {
+            throw new HarnessException(
+                    "scenario " + scenario.id() + ": framerate was throttled during " + phase
+                            + " (" + throttles + ")");
         }
     }
 
@@ -232,9 +394,16 @@ public final class HarnessRun {
         return scenario.stopCondition();
     }
 
-    private void discard(WorldSpec world) {
+    private void close() {
         try {
             port.closeWorld();
+        } catch (RuntimeException e) {
+            runFlags.add("could not close the world: " + e.getMessage());
+        }
+    }
+
+    private void discard(WorldSpec world) {
+        try {
             port.deleteWorld(world.levelId());
         } catch (RuntimeException e) {
             // Cleanup failure must not replace the real outcome -- losing the exception that

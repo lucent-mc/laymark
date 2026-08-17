@@ -61,9 +61,9 @@ public final class MarkdownReport {
                         .append(" | ")
                         .append(candidate)
                         .append(" | ")
-                        .append(String.format("%.1f%%", cumulative.get(i)))
+                        .append(String.format(java.util.Locale.ROOT, "%.1f%%", cumulative.get(i)))
                         .append(" | ")
-                        .append(String.format("%.1f%%", report.marginalFor(candidate)))
+                        .append(String.format(java.util.Locale.ROOT, "%.1f%%", report.marginalFor(candidate)))
                         .append(" |\n");
             }
             out.append(
@@ -89,7 +89,7 @@ public final class MarkdownReport {
                 out.append("- ")
                         .append(entry.candidate())
                         .append(" — ")
-                        .append(String.format("%.1f%%", entry.scorePercent()))
+                        .append(String.format(java.util.Locale.ROOT, "%.1f%%", entry.scorePercent()))
                         .append(", ")
                         .append(entry.verdict());
                 if (entry.bundleMembers().size() > 1) {
@@ -119,9 +119,9 @@ public final class MarkdownReport {
                     .append(" | **")
                     .append(comparison.band())
                     .append("** | ")
-                    .append(String.format("%.1f%%", comparison.improvementPercent()))
+                    .append(String.format(java.util.Locale.ROOT, "%.1f%%", comparison.improvementPercent()))
                     .append(" | ")
-                    .append(String.format("%.1f%% to %.1f%%", -comparison.highPercent(),
+                    .append(String.format(java.util.Locale.ROOT, "%.1f%% to %.1f%%", -comparison.highPercent(),
                             -comparison.lowPercent()))
                     .append(" | ")
                     .append(comparison.pairs())

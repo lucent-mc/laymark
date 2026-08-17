@@ -34,6 +34,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.levelgen.WorldOptions;
@@ -132,6 +133,27 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 });
     }
 
+    @Override
+    public void openWorld(WorldSpec spec) {
+        ClientThread.call(
+                "opening the world",
+                Duration.ofMinutes(10),
+                () -> {
+                    Minecraft minecraft = Minecraft.getInstance();
+                    currentLevelId = spec.levelId();
+
+                    if (!minecraft.getLevelSource().levelExists(spec.levelId())) {
+                        // The scenario this one depends on was supposed to leave this behind.
+                        // Continuing would generate the terrain here and time it as streaming.
+                        throw new HarnessException(
+                                "save " + spec.levelId() + " is not there; the scenario that"
+                                        + " generates it did not complete");
+                    }
+                    minecraft.createWorldOpenFlows().openWorld(spec.levelId(), () -> {});
+                    return null;
+                });
+    }
+
     /**
      * Polls the composite barrier, timing each condition separately.
      *
@@ -213,6 +235,40 @@ public final class MinecraftHarnessPort implements HarnessPort {
 
     @Override
     public void position(Pose pose) {
+        teleport(pose);
+        // Let the renderer rebuild around the new position, then re-confirm the barrier: the
+        // teleport invalidated the sections the earlier barrier was satisfied by.
+        ClientThread.sleep(SETTLE_AFTER_MOVE);
+        awaitReady(Duration.ofMinutes(2));
+    }
+
+    /**
+     * Pins the game rules that would otherwise vary inside a capture.
+     *
+     * <p>Post-join, because {@code createFreshLevel} takes no game rules — the sibling that does is
+     * a different entry point entirely. Left at vanilla defaults, time advances, weather changes
+     * and mobs spawn <em>during the measured window</em>: four variables moving independently of
+     * the thing under test, in both arms but never identically.
+     */
+    @Override
+    public void pinGameRules() {
+        ClientThread.run(
+                "pinning game rules",
+                () -> {
+                    MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+                    if (server == null) {
+                        throw new HarnessException("no integrated server to pin rules on");
+                    }
+                    GameRules rules = server.getGameRules();
+                    rules.set(GameRules.ADVANCE_TIME, false, server);
+                    rules.set(GameRules.ADVANCE_WEATHER, false, server);
+                    rules.set(GameRules.SPAWN_MOBS, false, server);
+                    rules.set(GameRules.SPAWN_MONSTERS, false, server);
+                });
+    }
+
+    @Override
+    public void teleport(Pose pose) {
         ClientThread.run(
                 "positioning the player",
                 () -> {
@@ -232,11 +288,6 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     player.getAbilities().invulnerable = true;
                     player.onUpdateAbilities();
                 });
-
-        // Let the renderer rebuild around the new position, then re-confirm the barrier: the
-        // teleport invalidated the sections the earlier barrier was satisfied by.
-        ClientThread.sleep(SETTLE_AFTER_MOVE);
-        awaitReady(Duration.ofMinutes(2));
     }
 
     /**
@@ -395,7 +446,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
     private volatile Opened openedAt;
 
     @Override
-    public Measurement capture(StopCondition stop) {
+    public Measurement capture(StopCondition stop, Pose around, int viewDistance) {
         String throttled = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
         if (throttled != null) {
             // Refused up front rather than flagged. A window that starts throttled is capped for
@@ -406,7 +457,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
         }
 
         beginCapture();
-        awaitStop(stop, openedAt.work());
+        awaitStop(stop, around, viewDistance);
         return endCapture();
     }
 
@@ -419,30 +470,56 @@ public final class MinecraftHarnessPort implements HarnessPort {
      * short capture and a completed one are not the same measurement, and silently substituting
      * one for the other would put the arms on different workloads.
      */
-    private void awaitStop(StopCondition stop, WorkCounters workBefore) {
+    @Override
+    public void awaitStop(StopCondition stop, Pose around, int viewDistance) {
+        if (openedAt == null) {
+            throw new HarnessException("no capture is open");
+        }
         if (stop.kind() == StopCondition.Kind.TIME) {
             ClientThread.sleep(stop.duration());
             return;
         }
 
         long deadline = System.nanoTime() + stop.timeout().toNanos();
+        long progress = 0;
+        long stalledSince = System.nanoTime();
+        long best = -1;
+
         while (System.nanoTime() < deadline) {
-            long progress =
+            progress =
                     switch (stop.kind()) {
                         case FRAMES -> recorder.sampleCount();
                         case CHUNKS ->
-                                ClientThread.call("reading work counters", Counters::work)
-                                                .clientChunks()
-                                        - workBefore.clientChunks();
+                                ClientThread.call(
+                                        "counting loaded chunks",
+                                        () ->
+                                                Counters.chunksLoadedAround(
+                                                        around.chunkX(), around.chunkZ(), viewDistance));
                         case TIME -> throw new IllegalStateException("handled above");
                     };
             if (progress >= stop.target()) {
                 return;
             }
+            if (progress > best) {
+                best = progress;
+                stalledSince = System.nanoTime();
+            } else if (System.nanoTime() - stalledSince > STALL_TIMEOUT.toNanos()) {
+                // Nothing arriving for minutes means the game stopped working, not that it is
+                // slow. Waiting out the full timeout on a dead run costs an operator the rest of
+                // an unattended schedule; saying so costs nothing.
+                throw new HarnessException(
+                        "capture stalled at " + progress + " of " + stop.target() + " " + stop.kind()
+                                + " -- nothing arrived for " + STALL_TIMEOUT.toSeconds()
+                                + "s. The integrated server pauses whenever a screen is open"
+                                + " (Screen.isPauseScreen defaults to true), which stops chunk"
+                                + " generation entirely; check the game window.");
+            }
             ClientThread.sleep(PROGRESS_POLL);
         }
         throw new HarnessException(
-                "capture did not reach "
+                "capture reached only "
+                        + progress
+                        + " of "
                         + stop.target()
                         + " "
                         + stop.kind()
@@ -450,6 +527,9 @@ public final class MinecraftHarnessPort implements HarnessPort {
                         + stop.timeout().toSeconds()
                         + "s");
     }
+
+    /** How long a completion target may make no progress at all before the run is called dead. */
+    private static final Duration STALL_TIMEOUT = Duration.ofMinutes(3);
 
     /** How often to ask whether a completion target has been met. */
     private static final Duration PROGRESS_POLL = Duration.ofMillis(100);

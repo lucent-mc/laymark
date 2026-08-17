@@ -38,18 +38,12 @@ public record PresetReadback(
      * <p>Returns findings rather than throwing: the caller decides whether a deviation fails the
      * scenario or is recorded against it, and that decision differs by phase.
      *
-     * <p>VSync is deliberately not compared. The client stores the request and hands it to the
-     * graphics device, which is free to ignore it, and exposes no getter for what the device
-     * actually did. The only value available to read back is the request itself, so comparing it
-     * would report agreement that was never checked — worse than an unchecked setting, because it
-     * looks checked. It is recorded as requested and left to frame pacing to expose.
-     */
+         */
     public List<String> deviationsFrom(Preset requested) {
         List<String> deviations = new ArrayList<>();
         compare(deviations, "renderDistance", requested.renderDistance(), effective.renderDistance());
         compare(deviations, "simulationDistance", requested.simulationDistance(),
                 effective.simulationDistance());
-        compare(deviations, "framerateLimit", requested.framerateLimit(), effective.framerateLimit());
         compare(deviations, "particles", requested.particles(), effective.particles());
         compare(deviations, "clouds", requested.clouds(), effective.clouds());
         compare(deviations, "entityShadows", requested.entityShadows(), effective.entityShadows());
