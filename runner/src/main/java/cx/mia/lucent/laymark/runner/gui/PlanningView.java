@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.runner.gui;
 
+import cx.mia.lucent.laymark.core.experiment.Schedule;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
 import cx.mia.lucent.laymark.runner.materialize.ModsDirectory;
 import java.awt.BorderLayout;
@@ -18,12 +19,13 @@ import java.util.TreeSet;
 import java.util.stream.Stream;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.JSpinner;
-import javax.swing.SpinnerNumberModel;
+import javax.swing.JTextField;
 
 /**
  * What to benchmark, chosen before anything launches.
@@ -39,24 +41,27 @@ import javax.swing.SpinnerNumberModel;
  */
 public final class PlanningView extends JPanel {
 
-    /** Everything the run needs that arguments would otherwise have carried. */
+    /**
+     * Everything the run needs that arguments would otherwise have carried.
+     *
+     * <p>What to measure is not here: that is the scenario config's job, and it is the operator's
+     * to write. Pose, preset, phases and stop condition all live in that file.
+     */
     public record Choice(
-            ModrinthInstance instance,
-            Set<String> candidates,
-            int captureSeconds,
-            int repetitions,
-            int renderDistance) {}
+            ModrinthInstance instance, Set<String> candidates, Path config, Schedule schedule) {}
 
     private static final String NO_VERSION = "— pick one —";
     private static final String VERSION_KEY = "version.";
+    private static final String SCHEDULE_KEY = "schedule";
+    private static final String DEFAULT_SCHEDULE = "A,B,C,B,C";
     private static final java.util.prefs.Preferences PREFERENCES =
             java.util.prefs.Preferences.userRoot().node("cx/mia/lucent/laymark");
 
     private final JComboBox<String> profiles = new JComboBox<>();
     private final JComboBox<String> versions = new JComboBox<>();
-    private final JSpinner captureSeconds = new JSpinner(new SpinnerNumberModel(30, 5, 600, 5));
-    private final JSpinner repetitions = new JSpinner(new SpinnerNumberModel(3, 1, 20, 1));
-    private final JSpinner renderDistance = new JSpinner(new SpinnerNumberModel(12, 2, 32, 1));
+    private final JTextField config = new JTextField(38);
+    private final JTextField schedule =
+            new JTextField(PREFERENCES.get(SCHEDULE_KEY, DEFAULT_SCHEDULE), 16);
 
     private final JPanel modList = new JPanel();
     private final JLabel modCount = Theme.muted("");
@@ -112,7 +117,7 @@ public final class PlanningView extends JPanel {
 
     private JPanel instanceCard() {
         JPanel card = Theme.card("Instance");
-        JPanel fields = new JPanel(new GridLayout(2, 1, 0, 8));
+        JPanel fields = new JPanel(new GridLayout(3, 1, 0, 8));
         fields.setOpaque(false);
 
         JPanel top = row();
@@ -121,18 +126,41 @@ public final class PlanningView extends JPanel {
         top.add(Theme.muted("version"));
         top.add(versions);
 
+        JButton browse = Theme.button("Browse", false);
+        browse.addActionListener(unused -> browseForConfig());
+        JPanel middle = row();
+        middle.add(Theme.muted("scenarios"));
+        middle.add(config);
+        middle.add(browse);
+
         JPanel bottom = row();
-        bottom.add(Theme.muted("capture seconds"));
-        bottom.add(captureSeconds);
-        bottom.add(Theme.muted("repeats per arm"));
-        bottom.add(repetitions);
-        bottom.add(Theme.muted("render distance"));
-        bottom.add(renderDistance);
+        bottom.add(Theme.muted("schedule"));
+        bottom.add(schedule);
+        // The legend is the documentation. A schedule field with no key beside it is a field people
+        // leave alone.
+        bottom.add(Theme.muted("A acclimation   B baseline   C a pass over the candidates   CC twice each"));
 
         fields.add(top);
+        fields.add(middle);
         fields.add(bottom);
         card.add(fields, BorderLayout.CENTER);
         return card;
+    }
+
+    /**
+     * What each scenario measures — pose, preset, phases, stop condition — comes from this file.
+     *
+     * <p>Laymark ships none. What is worth measuring is a property of the pack and of whoever is
+     * tuning it, and a benchmark that invents its own scenarios measures its own opinion.
+     */
+    private void browseForConfig() {
+        JFileChooser chooser = new JFileChooser(config.getText().isBlank() ? "." : config.getText());
+        chooser.setDialogTitle("Scenario config");
+        chooser.setFileFilter(
+                new javax.swing.filechooser.FileNameExtensionFilter("Scenario config (*.json)", "json"));
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            config.setText(chooser.getSelectedFile().getAbsolutePath());
+        }
     }
 
     private JPanel candidatesCard() {
@@ -252,15 +280,26 @@ public final class PlanningView extends JPanel {
     Choice choice() {
         String profile = (String) profiles.getSelectedItem();
         String version = (String) versions.getSelectedItem();
-        if (profile == null || version == null || NO_VERSION.equals(version) || selected().isEmpty()) {
+        if (profile == null
+                || version == null
+                || NO_VERSION.equals(version)
+                || selected().isEmpty()
+                || !Files.isRegularFile(configPath())) {
             return null;
         }
+        Schedule parsed;
+        try {
+            parsed = Schedule.of(schedule.getText());
+        } catch (RuntimeException e) {
+            return null;
+        }
+        PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
         return new Choice(
-                new ModrinthInstance(root, profile, version),
-                selected(),
-                (Integer) captureSeconds.getValue(),
-                (Integer) repetitions.getValue(),
-                (Integer) renderDistance.getValue());
+                new ModrinthInstance(root, profile, version), selected(), configPath(), parsed);
+    }
+
+    private Path configPath() {
+        return Path.of(config.getText().trim());
     }
 
     /** Why {@link #choice()} returned nothing, phrased for whoever is looking at the form. */
@@ -276,6 +315,18 @@ public final class PlanningView extends JPanel {
             return "Pick the game version this profile runs. Laymark does not read the launcher's"
                     + " database, so it will not guess — and the wrong guess launches the wrong"
                     + " game. It is remembered after the first time.";
+        }
+        if (config.getText().isBlank()) {
+            return "Choose a scenario config. It is what says what to measure — where to stand,"
+                    + " which phases, and when to stop — and Laymark ships none of its own.";
+        }
+        if (!Files.isRegularFile(configPath())) {
+            return "No scenario config at " + configPath() + ".";
+        }
+        try {
+            Schedule.of(schedule.getText());
+        } catch (RuntimeException e) {
+            return e.getMessage();
         }
         return "Check at least one mod to benchmark.";
     }

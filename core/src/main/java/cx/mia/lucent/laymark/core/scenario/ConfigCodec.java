@@ -45,6 +45,7 @@ public final class ConfigCodec {
                             Preset.ParticleDetail.class, StrictEnum.of(Preset.ParticleDetail.class))
                     .registerTypeAdapter(
                             Preset.CloudDetail.class, StrictEnum.of(Preset.CloudDetail.class))
+                    .registerTypeAdapter(Preset.class, new PresetAdapter())
                     .registerTypeAdapter(PresetRef.class, new PresetRefAdapter())
                     .create();
 

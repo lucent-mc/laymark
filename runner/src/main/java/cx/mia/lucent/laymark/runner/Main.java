@@ -164,7 +164,7 @@ public final class Main {
         System.setErr(window.tee(System.err));
     }
 
-    /** One planned experiment: baseline against each chosen candidate, bracketed and repeated. */
+    /** One planned experiment: the chosen candidates, in the order the schedule asks for. */
     private static void execute(
             cx.mia.lucent.laymark.runner.gui.PlanningView.Choice choice,
             RunControl control,
@@ -173,43 +173,43 @@ public final class Main {
             String runId = LocalDateTime.now().format(RUN_ID);
             Path outputDirectory =
                     Path.of("benchmark-results").resolve(runId).toAbsolutePath();
-
-            Map<String, String> options =
-                    Map.of(
-                            "duration", String.valueOf(choice.captureSeconds()),
-                            "render-distance", String.valueOf(choice.renderDistance()));
-            RunPlan plan = configFromFlags(options).resolve(runId, outputDirectory.toString());
+            RunPlan plan = readConfig(choice.config()).resolve(runId, outputDirectory.toString());
 
             var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(
                     choice.instance().gameDirectory());
-            var installed = mods.read().enabledNames();
-            var baseline = new java.util.TreeSet<>(installed);
-            baseline.removeAll(choice.candidates());
+            // The baseline is the pack with every candidate withheld, so each arm reads as "with
+            // it" against "without it" rather than against the pack as it happened to be found.
+            var floor = new java.util.TreeSet<>(mods.read().enabledNames());
+            floor.removeAll(choice.candidates());
 
-            var arms = new java.util.ArrayList<cx.mia.lucent.laymark.core.experiment.Arm>();
-            arms.add(
+            var baseline =
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            "baseline",
+                            cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE,
+                            floor);
+            var acclimation =
                     new cx.mia.lucent.laymark.core.experiment.Arm(
                             "acclimation",
                             cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
-                            baseline));
-            // Bracketed: a baseline before every sweep of candidates, so drift across the session
-            // shows up in the baselines rather than in whichever candidate ran late.
-            for (int repeat = 0; repeat < choice.repetitions(); repeat++) {
-                arms.add(
-                        new cx.mia.lucent.laymark.core.experiment.Arm(
-                                "baseline",
-                                cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE,
-                                baseline));
-                for (String candidate : choice.candidates()) {
-                    var enabled = new java.util.TreeSet<>(baseline);
-                    enabled.add(candidate);
-                    arms.add(
-                            new cx.mia.lucent.laymark.core.experiment.Arm(
-                                    candidate,
-                                    cx.mia.lucent.laymark.core.experiment.Arm.Kind.CANDIDATE,
-                                    enabled));
-                }
-            }
+                            floor);
+            List<cx.mia.lucent.laymark.core.experiment.Arm> candidates =
+                    choice.candidates().stream()
+                            .map(
+                                    candidate -> {
+                                        var enabled = new java.util.TreeSet<>(floor);
+                                        enabled.add(candidate);
+                                        return new cx.mia.lucent.laymark.core.experiment.Arm(
+                                                candidate,
+                                                cx.mia.lucent.laymark.core.experiment.Arm.Kind
+                                                        .CANDIDATE,
+                                                enabled);
+                                    })
+                            .toList();
+
+            var arms = choice.schedule().expand(candidates, baseline, acclimation, false);
+            System.out.printf(
+                    "schedule %s over %d candidate(s): %d arms%n",
+                    choice.schedule().template(), candidates.size(), arms.size());
 
             ExperimentRun.execute(
                     choice.instance(),
@@ -217,7 +217,7 @@ public final class Main {
                     arms,
                     choice.candidates(),
                     outputDirectory,
-                    Path.of("").toAbsolutePath(),
+                    choice.config().toAbsolutePath().getParent(),
                     Duration.ofSeconds(900),
                     control,
                     listener);

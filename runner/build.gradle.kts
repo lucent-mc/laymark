@@ -30,6 +30,10 @@ val runnerJar =
             )
         }
         from(sourceSets.main.get().output)
+        // Declared, not just read: unpacking inside a `from {}` closure hides the dependency, and
+        // the jar silently packages whatever ':core:jar' was last built -- which is how a stale
+        // core ends up shipped beside freshly built runner classes.
+        dependsOn(configurations.runtimeClasspath)
         from({
             configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) }
         })
