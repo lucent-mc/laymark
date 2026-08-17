@@ -102,6 +102,10 @@ final class Theme {
         pane.setBorder(BorderFactory.createEmptyBorder());
         pane.getViewport().setOpaque(false);
         pane.setOpaque(false);
+        // Swing's default unit increment is one pixel, which reads as a stuck scroll bar the
+        // moment the content is a list. One wheel notch is three units, so this is ~50px a notch.
+        pane.getVerticalScrollBar().setUnitIncrement(16);
+        pane.getHorizontalScrollBar().setUnitIncrement(16);
         return pane;
     }
 

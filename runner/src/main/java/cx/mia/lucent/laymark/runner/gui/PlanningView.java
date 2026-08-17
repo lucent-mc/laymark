@@ -106,6 +106,7 @@ public final class PlanningView extends JPanel {
     private final JPanel modList = new JPanel();
     private final JLabel modCount = Theme.muted("");
     private final Map<String, RoleControl> roles = new LinkedHashMap<>();
+    private final JTextField search = new JTextField(18);
     private final JPanel presetRow = row();
 
     private DependencyGraph graph;
@@ -216,6 +217,23 @@ public final class PlanningView extends JPanel {
         modList.setLayout(new BoxLayout(modList, BoxLayout.Y_AXIS));
         modList.setOpaque(false);
 
+        search.putClientProperty("JTextField.placeholderText", "search");
+        search.getDocument()
+                .addDocumentListener(
+                        new javax.swing.event.DocumentListener() {
+                            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                                refilter();
+                            }
+
+                            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                                refilter();
+                            }
+
+                            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                                refilter();
+                            }
+                        });
+
         JPanel legend = new JPanel(new BorderLayout());
         legend.setOpaque(false);
         legend.add(
@@ -225,13 +243,87 @@ public final class PlanningView extends JPanel {
                 BorderLayout.WEST);
         legend.add(modCount, BorderLayout.EAST);
 
+        JPanel top = new JPanel(new BorderLayout(8, 0));
+        top.setOpaque(false);
+        top.add(presets(), BorderLayout.WEST);
+        top.add(search, BorderLayout.CENTER);
+
         JPanel body = new JPanel(new BorderLayout(0, 8));
         body.setOpaque(false);
-        body.add(presets(), BorderLayout.NORTH);
+        body.add(top, BorderLayout.NORTH);
         body.add(Theme.scroll(modList), BorderLayout.CENTER);
         body.add(legend, BorderLayout.SOUTH);
         card.add(body, BorderLayout.CENTER);
         return card;
+    }
+
+    /**
+     * Rebuilds the visible list from the roster: fuzzy-matched against the query, best match
+     * first, declaration order when the query is empty.
+     *
+     * <p>Filtering shows and hides the same {@link RoleControl} instances rather than recreating
+     * them, so an assignment made while filtered survives the filter changing.
+     */
+    private void refilter() {
+        String query = search.getText().trim();
+        modList.removeAll();
+        if (query.isEmpty()) {
+            roles.values().forEach(modList::add);
+        } else {
+            roles.entrySet().stream()
+                    .map(entry -> Map.entry(entry.getValue(), fuzzyScore(query, entry.getKey())))
+                    .filter(entry -> entry.getValue() > 0)
+                    .sorted(Map.Entry.<RoleControl, Integer>comparingByValue().reversed())
+                    .forEach(entry -> modList.add(entry.getKey()));
+        }
+        modList.add(Box.createVerticalGlue());
+        modList.revalidate();
+        modList.repaint();
+    }
+
+    /**
+     * Subsequence match with a relevance score; 0 means no match.
+     *
+     * <p>Small and predictable beats clever here: every query character must appear in order, and
+     * the score prefers consecutive characters, matches at the start, and matches at word breaks
+     * ({@code -}, {@code _}, {@code .}, a digit boundary). That is enough to put
+     * {@code sodium-extra} above {@code reeses-sodium-options} for "sod ex" style queries without
+     * anyone having to learn what the matcher rewards.
+     */
+    private static int fuzzyScore(String query, String candidate) {
+        String q = query.toLowerCase(Locale.ROOT);
+        String c = candidate.toLowerCase(Locale.ROOT);
+        int score = 0;
+        // The whole query appearing verbatim outranks any scattered match: "cul" should surface
+        // entityculling and moreculling ahead of a c, a u and an l that happen to occur in order.
+        String verbatim = q.replace(" ", "");
+        if (!verbatim.isEmpty() && c.contains(verbatim)) {
+            score += 5 * verbatim.length();
+        }
+        int at = 0;
+        int streak = 0;
+        for (int i = 0; i < q.length(); i++) {
+            char wanted = q.charAt(i);
+            if (wanted == ' ') {
+                streak = 0;
+                continue;
+            }
+            int found = c.indexOf(wanted, at);
+            if (found < 0) {
+                return 0;
+            }
+            streak = found == at ? streak + 1 : 1;
+            score += streak;
+            if (found == 0 || isWordBreak(c.charAt(found - 1))) {
+                score += 3;
+            }
+            at = found + 1;
+        }
+        return score;
+    }
+
+    private static boolean isWordBreak(char before) {
+        return before == '-' || before == '_' || before == '.' || Character.isDigit(before);
     }
 
     /**
@@ -348,19 +440,16 @@ public final class PlanningView extends JPanel {
     }
 
     private void reloadMods() {
-        modList.removeAll();
         roles.clear();
         String profile = (String) profiles.getSelectedItem();
         if (profile != null) {
             Path gameDirectory = root.resolve("profiles").resolve(profile);
             probeDependencies(gameDirectory);
             for (String name : installed(gameDirectory)) {
-                RoleControl control = new RoleControl(name, this::roleChanged);
-                roles.put(name, control);
-                modList.add(control);
+                roles.put(name, new RoleControl(name, this::roleChanged));
             }
         }
-        modList.add(Box.createVerticalGlue());
+        refilter();
         presets();
         updateCount();
         revalidate();
