@@ -252,9 +252,11 @@ public final class HarnessRun {
             }
             long phaseStartedAt = System.nanoTime();
             Measurement measurement =
-                    phase == Phase.UNGENERATED_TRAVERSAL
-                            ? traverse(scenario, phaseStartedAt)
-                            : residentAt(scenario, phase, phaseStartedAt);
+                    switch (phase) {
+                        case UNGENERATED_TRAVERSAL -> traverse(scenario, phaseStartedAt);
+                        case GENERATED_STREAMING -> stream(scenario, phaseStartedAt);
+                        default -> residentAt(scenario, phase, phaseStartedAt);
+                    };
 
             if (!measurement.measured()) {
                 throw new HarnessException(
@@ -315,49 +317,69 @@ public final class HarnessRun {
         return port.endCapture();
     }
 
-    /** The phases that measure a settled state, where positioning is setup rather than the event. */
-    private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
-        port.position(scenario.pose());
-        requirePreconditions(scenario, phase);
-        events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
-        return port.capture(
-                scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+    /**
+     * Measures streaming: the arrival is the event, so the capture brackets the teleport.
+     *
+     * <p>The same shape as {@link #traverse}, and it has to be — settling at the pose first would
+     * stream and mesh the very chunks the capture exists to time, then fail its own negative
+     * precondition. Both preconditions are checked <strong>before the player moves</strong>.
+     *
+     * <p>The positive precondition has two honest answers: terrain from a {@code dependsOn}
+     * scenario that generated it, or terrain pre-generated here through Chunky, off the measured
+     * path. A scenario with neither fails rather than quietly timing generation and calling it
+     * streaming — the larger number under the wrong name.
+     */
+    private Measurement stream(ScenarioSpec scenario, long phaseStartedAt) {
+        if (port.targetIsUngenerated(scenario.pose())) {
+            if (!scenario.dependsOn().isEmpty()) {
+                throw new HarnessException(
+                        "scenario " + scenario.id() + " depends on " + scenario.dependsOn()
+                                + " but its target has never been generated; the dependency did"
+                                + " not do what the dependency exists to do");
+            }
+            String unavailable = port.pregenerationUnavailableReason();
+            if (unavailable != null) {
+                throw new HarnessException(
+                        "scenario " + scenario.id() + " measures streaming from disk, but its"
+                                + " target has never been generated; it needs dependsOn a scenario"
+                                + " that generates it, or Chunky for pre-generation ("
+                                + unavailable + ")");
+            }
+            port.pregenerate(
+                    scenario.pose(), scenario.preset().renderDistance(), PREGENERATION_TIMEOUT);
+        }
+        if (!port.targetHasNoBuiltSections(scenario.pose())) {
+            throw new HarnessException(
+                    "scenario " + scenario.id() + " measures client streaming, but the target is"
+                            + " already meshed; the work it exists to time has already happened");
+        }
+
+        events.accept(new Frame.PhaseEntered(scenario.id(), Phase.GENERATED_STREAMING, phaseStartedAt));
+        port.beginCapture();
+        port.teleport(scenario.pose());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        return port.endCapture();
     }
 
     /**
-     * Fails the repetition unless the phase is measuring what it claims to.
-     *
-     * <p>Two of the four phases carry the most dangerous failure mode in the harness: a traversal
-     * whose target was already generated, or a streaming phase whose sections are already meshed,
-     * <strong>completes normally and reports flatteringly good numbers</strong>. Nothing in the
-     * output distinguishes that from a genuinely fast stack, so it fails rather than flags.
+     * A bound on broken pre-generation, not a budget for honest work — and generous for the same
+     * reason as {@link #READY_TIMEOUT}: a benchmark that gives up on a slow stack reports only
+     * fast ones.
      */
-    private void requirePreconditions(ScenarioSpec scenario, Phase phase) {
-        switch (phase) {
-            // Traversal checks its own, before the player moves -- see traverse().
-            case UNGENERATED_TRAVERSAL -> {}
-            case GENERATED_STREAMING -> {
-                // Positive: the terrain must already exist, or this times generation and calls it
-                // streaming -- the same number under the wrong name, and far the larger one.
-                if (port.targetIsUngenerated(scenario.pose())) {
-                    throw new HarnessException(
-                            "scenario " + scenario.id()
-                                    + " measures streaming from disk, but its target has never been"
-                                    + " generated; it needs dependsOn a scenario that generates it");
-                }
-                // Negative: the client must not already hold the meshes.
-                if (!port.targetHasNoBuiltSections(scenario.pose())) {
-                    throw new HarnessException(
-                            "scenario " + scenario.id()
-                                    + " measures client streaming, but the target is already"
-                                    + " meshed; the work it exists to time has already happened");
-                }
-            }
-            // Spawn generation is guaranteed fresh by construction -- a scenario measuring it
-            // creates its own save -- and resident render is the one phase where "already
-            // finished" is the point rather than a hazard.
-            case SPAWN_GENERATION, RESIDENT_RENDER -> {}
-        }
+    private static final Duration PREGENERATION_TIMEOUT = Duration.ofMinutes(60);
+
+    /**
+     * The phases that measure a settled state, where positioning is setup rather than the event.
+     *
+     * <p>No precondition gate here, and none missing: traversal and streaming check their own
+     * before the player moves, spawn generation is fresh by construction, and resident render is
+     * the one phase where "already finished" is the point rather than a hazard.
+     */
+    private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
+        port.position(scenario.pose());
+        events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
+        return port.capture(
+                scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
     }
 
     /**

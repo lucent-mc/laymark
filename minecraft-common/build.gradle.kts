@@ -19,15 +19,17 @@ neoForge {
  */
 repositories {
     maven("https://repo.lucko.me/") { name = "Lucko" }
+    maven("https://api.modrinth.com/maven") { name = "Modrinth" }
 }
 
 dependencies {
     implementation(project(":core"))
 
-    // compileOnly, and it must stay that way. The installed Spark mod provides the implementation
-    // at runtime; bundling a copy would put a second one inside the process being measured, which
+    // compileOnly, and it must stay that way. The installed mods provide the implementations at
+    // runtime; bundling a copy would put a second one inside the process being measured, which
     // is the one place Laymark cannot afford to add classes.
     compileOnly(libs.spark.api)
+    compileOnly(libs.chunky)
 }
 
 /**

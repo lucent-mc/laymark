@@ -123,6 +123,26 @@ public interface HarnessPort {
     boolean targetHasNoBuiltSections(Pose pose);
 
     /**
+     * Why terrain pre-generation is unavailable, or null when {@link #pregenerate} can be used.
+     *
+     * <p>Pre-generation is what lets a streaming scenario stand alone: without it, terrain can
+     * only come from a {@code dependsOn} scenario that generated it on the measured path.
+     */
+    String pregenerationUnavailableReason();
+
+    /**
+     * Generates terrain around the pose, saves it to disk, and verifies it is there.
+     *
+     * <p>Off the measured path entirely — no capture is open. The footprint must cover at least
+     * the send disc for the view distance, because an under-covered target turns the streaming
+     * capture into part-generation, which is the contamination this operation exists to prevent.
+     *
+     * @throws HarnessException if generation does not complete, is cancelled, or the footprint
+     *     cannot be verified on disk
+     */
+    void pregenerate(Pose around, int viewDistance, Duration timeout);
+
+    /**
      * Pins the game rules that would otherwise vary inside a capture.
      *
      * <p>Time, weather and mob spawning all advance during a measured window at vanilla defaults --
