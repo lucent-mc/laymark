@@ -446,7 +446,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
     private volatile Opened openedAt;
 
     @Override
-    public Measurement capture(StopCondition stop) {
+    public Measurement capture(StopCondition stop, Pose around, int viewDistance) {
         String throttled = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
         if (throttled != null) {
             // Refused up front rather than flagged. A window that starts throttled is capped for
@@ -457,7 +457,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
         }
 
         beginCapture();
-        awaitStop(stop, openedAt.work());
+        awaitStop(stop, around, viewDistance);
         return endCapture();
     }
 
@@ -471,38 +471,55 @@ public final class MinecraftHarnessPort implements HarnessPort {
      * one for the other would put the arms on different workloads.
      */
     @Override
-    public void awaitStop(StopCondition stop) {
-        Opened opened = openedAt;
-        if (opened == null) {
+    public void awaitStop(StopCondition stop, Pose around, int viewDistance) {
+        if (openedAt == null) {
             throw new HarnessException("no capture is open");
         }
-        awaitStop(stop, opened.work());
-    }
-
-    private void awaitStop(StopCondition stop, WorkCounters workBefore) {
         if (stop.kind() == StopCondition.Kind.TIME) {
             ClientThread.sleep(stop.duration());
             return;
         }
 
         long deadline = System.nanoTime() + stop.timeout().toNanos();
+        long progress = 0;
+        long stalledSince = System.nanoTime();
+        long best = -1;
+
         while (System.nanoTime() < deadline) {
-            long progress =
+            progress =
                     switch (stop.kind()) {
                         case FRAMES -> recorder.sampleCount();
                         case CHUNKS ->
-                                ClientThread.call("reading work counters", Counters::work)
-                                                .clientChunks()
-                                        - workBefore.clientChunks();
+                                ClientThread.call(
+                                        "counting loaded chunks",
+                                        () ->
+                                                Counters.chunksLoadedAround(
+                                                        around.chunkX(), around.chunkZ(), viewDistance));
                         case TIME -> throw new IllegalStateException("handled above");
                     };
             if (progress >= stop.target()) {
                 return;
             }
+            if (progress > best) {
+                best = progress;
+                stalledSince = System.nanoTime();
+            } else if (System.nanoTime() - stalledSince > STALL_TIMEOUT.toNanos()) {
+                // Nothing arriving for minutes means the game stopped working, not that it is
+                // slow. Waiting out the full timeout on a dead run costs an operator the rest of
+                // an unattended schedule; saying so costs nothing.
+                throw new HarnessException(
+                        "capture stalled at " + progress + " of " + stop.target() + " " + stop.kind()
+                                + " -- nothing arrived for " + STALL_TIMEOUT.toSeconds()
+                                + "s. The integrated server pauses whenever a screen is open"
+                                + " (Screen.isPauseScreen defaults to true), which stops chunk"
+                                + " generation entirely; check the game window.");
+            }
             ClientThread.sleep(PROGRESS_POLL);
         }
         throw new HarnessException(
-                "capture did not reach "
+                "capture reached only "
+                        + progress
+                        + " of "
                         + stop.target()
                         + " "
                         + stop.kind()
@@ -510,6 +527,9 @@ public final class MinecraftHarnessPort implements HarnessPort {
                         + stop.timeout().toSeconds()
                         + "s");
     }
+
+    /** How long a completion target may make no progress at all before the run is called dead. */
+    private static final Duration STALL_TIMEOUT = Duration.ofMinutes(3);
 
     /** How often to ask whether a completion target has been met. */
     private static final Duration PROGRESS_POLL = Duration.ofMillis(100);

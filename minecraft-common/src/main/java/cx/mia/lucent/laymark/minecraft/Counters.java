@@ -3,7 +3,9 @@ package cx.mia.lucent.laymark.minecraft;
 import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
 import cx.mia.lucent.laymark.core.harness.WorkCounters;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 
 /**
  * Point-in-time readings of how much work has been done and what the heap looks like.
@@ -45,6 +47,47 @@ final class Counters {
         }
         return new WorkCounters(renderedSections, clientChunks, serverChunks);
     }
+
+    /**
+     * How many chunks the client holds within the send radius of a point.
+     *
+     * <p>Not global occupancy, and not a difference between two occupancies — both are wrong for
+     * the same reason. The client's storage holds roughly a full radius at all times: after a
+     * teleport it drops what it left behind as it takes on what it arrives at, so occupancy barely
+     * moves while thousands of chunks are received. A capture that stops on that difference waits
+     * for a number that never arrives. Observed on a real run: 3848 chunks held around the target,
+     * a 3725 target, and the delta still short of it after half an hour.
+     *
+     * <p>Counting what is present <em>around the pose</em> answers the question the phase actually
+     * asks — is the region loaded yet — and starts near zero because the scenario teleports
+     * somewhere nothing was loaded.
+     *
+     * <p>Client thread.
+     */
+    static long chunksLoadedAround(int centerChunkX, int centerChunkZ, int viewDistance) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return 0;
+        }
+        ClientChunkCache chunks = minecraft.level.getChunkSource();
+        long loaded = 0;
+        // The same bound the server sends within, so the count and its target are one definition.
+        int reach = viewDistance + CHUNK_TRACKING_BUFFER;
+        for (int x = centerChunkX - reach; x <= centerChunkX + reach; x++) {
+            for (int z = centerChunkZ - reach; z <= centerChunkZ + reach; z++) {
+                long dx = Math.max(0, Math.abs(x - centerChunkX) - CHUNK_TRACKING_BUFFER);
+                long dz = Math.max(0, Math.abs(z - centerChunkZ) - CHUNK_TRACKING_BUFFER);
+                if (dx * dx + dz * dz < (long) viewDistance * viewDistance
+                        && chunks.getChunk(x, z, ChunkStatus.FULL, false) != null) {
+                    loaded++;
+                }
+            }
+        }
+        return loaded;
+    }
+
+    /** Mirrors {@code ChunkTrackingView}'s neighbour allowance. */
+    private static final int CHUNK_TRACKING_BUFFER = 2;
 
     /**
      * Heap occupancy. Thread-agnostic: JVM-wide and safe to read from anywhere.

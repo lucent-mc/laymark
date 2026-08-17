@@ -273,7 +273,7 @@ public final class HarnessRun {
 
         port.beginCapture();
         port.teleport(scenario.pose());
-        port.awaitStop(scenario.stopCondition());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
         return port.endCapture();
     }
 
@@ -282,7 +282,8 @@ public final class HarnessRun {
         port.position(scenario.pose());
         requirePreconditions(scenario, phase);
         events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
-        return port.capture(scenario.stopCondition());
+        return port.capture(
+                scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
     }
 
     /**

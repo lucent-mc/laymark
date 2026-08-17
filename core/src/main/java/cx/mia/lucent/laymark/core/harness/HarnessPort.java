@@ -95,8 +95,13 @@ public interface HarnessPort {
      *
      * <p>Split out for the same reason as {@link #teleport}: a phase whose measured event happens
      * mid-window needs the window opened, the event triggered, and only then the wait.
+     *
+     * @param around where the region of interest is centred — a chunk target counts what is loaded
+     *     there, not global occupancy. The client holds about a full radius at all times, so a
+     *     count that ignored position would sit near its maximum before the capture even began.
+     * @param viewDistance how far out to count, in chunks; the same bound the target was sized on
      */
-    void awaitStop(StopCondition stop);
+    void awaitStop(StopCondition stop, Pose around, int viewDistance);
 
     /**
      * Whether the region around the pose has never been generated.
@@ -139,9 +144,10 @@ public interface HarnessPort {
      * <p>Takes the whole stop condition rather than a duration because two of the three kinds end
      * on the game making progress, which only the implementation can observe.
      *
+     * @param around where a chunk target judges completion — see {@link #awaitStop}
      * @throws HarnessException if the target is not reached within the condition's timeout
      */
-    Measurement capture(StopCondition stop);
+    Measurement capture(StopCondition stop, Pose around, int viewDistance);
 
     /**
      * Opens a capture window without deciding when it ends.
