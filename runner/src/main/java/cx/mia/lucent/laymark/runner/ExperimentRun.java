@@ -58,6 +58,8 @@ public final class ExperimentRun {
 
         List<Measured> measured = new ArrayList<>();
         List<Comparison.Run> baselineRuns = new ArrayList<>();
+        Map<String, Map.Entry<String, cx.mia.lucent.laymark.core.harness.PresetReadback>>
+                stimulusReference = new LinkedHashMap<>();
         // One round for now: the greedy driver that makes several is slice 9, and until it exists
         // the honest total is the arms actually scheduled.
         listener.scheduleBuilt(new ExperimentListener.Slate(runs, 1, 1, runs.size()));
@@ -125,6 +127,7 @@ public final class ExperimentRun {
                     if (!scenario.measured()) {
                         continue;
                     }
+                    SelectionRun.requireParity(stimulusReference, arm.id(), scenario);
                     // Scored on what the stop condition selected. A completion target produces a
                     // variable-length window, so its frame distribution is not comparable across
                     // arms -- time per unit of work is, which is the point of the target.
