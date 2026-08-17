@@ -36,4 +36,16 @@ public final class Laymark {
      * <p>Loopback is reachable by any local process, so this nonce is the access control.
      */
     public static final String PROPERTY_TOKEN = "laymark.token";
+
+    /**
+     * Where the runner leaves the plan, relative to the instance's game directory.
+     *
+     * <p>A file rather than a socket message: documents on disk, events on the wire. The plan has
+     * to be archived alongside the results for a historical run to stay interpretable, and a file
+     * can be read by a human diagnosing a launch that never got as far as connecting.
+     */
+    public static final String PLAN_PATH = "config/laymark/plan.json";
+
+    /** Result document name, written inside the plan's output directory. */
+    public static final String RESULT_FILE = "result.json";
 }

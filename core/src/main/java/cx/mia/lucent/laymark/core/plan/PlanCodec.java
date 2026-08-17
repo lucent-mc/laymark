@@ -9,6 +9,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
+import cx.mia.lucent.laymark.core.harness.HarnessException;
 import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -105,6 +106,12 @@ public final class PlanCodec {
         for (Throwable t = thrown; t != null; t = t.getCause()) {
             if (t instanceof PlanException planException) {
                 return planException;
+            }
+            // A scenario embeds a preset and a pose, which validate themselves and report as
+            // harness failures. Reaching a caller that way would be correct about the cause and
+            // wrong about the context: at read time this is a malformed plan, not a failed run.
+            if (t instanceof HarnessException harnessException) {
+                return new PlanException(harnessException.getMessage(), harnessException);
             }
         }
         return new PlanException(fallback + ": " + thrown.getMessage());

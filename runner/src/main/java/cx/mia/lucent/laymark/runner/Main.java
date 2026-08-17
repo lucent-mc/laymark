@@ -1,11 +1,20 @@
 package cx.mia.lucent.laymark.runner;
 
 import cx.mia.lucent.laymark.core.Laymark;
+import cx.mia.lucent.laymark.core.harness.Pose;
+import cx.mia.lucent.laymark.core.harness.Preset;
+import cx.mia.lucent.laymark.core.plan.RunPlan;
+import cx.mia.lucent.laymark.core.plan.ScenarioSpec;
+import cx.mia.lucent.laymark.core.plan.StopCondition;
+import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.runner.launch.LaunchException;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,6 +27,12 @@ import java.util.Map;
 public final class Main {
 
     private Main() {}
+
+    private static final DateTimeFormatter RUN_ID =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+
+    /** Above any terrain vanilla generates, so the pose does not depend on the seed's landscape. */
+    private static final double OBSERVATION_ALTITUDE = 200;
 
     public static void main(String[] args) {
         Map<String, String> options = parse(args);
@@ -36,10 +51,31 @@ public final class Main {
                             required(options, "profile"),
                             required(options, "version"));
 
-            LaunchSmoke.run(
-                    instance,
-                    Path.of(options.getOrDefault("out", "benchmark-results/smoke")),
-                    Duration.ofSeconds(Long.parseLong(options.getOrDefault("timeout", "300"))));
+            String runId = LocalDateTime.now().format(RUN_ID);
+            // Absolute, always. The harness reads this path from inside the game process, whose
+            // working directory is the instance -- a relative path would write results into the
+            // modpack.
+            Path outputDirectory =
+                    Path.of(options.getOrDefault("out", "benchmark-results"))
+                            .resolve(runId)
+                            .toAbsolutePath();
+
+            RunPlan plan = plan(runId, outputDirectory, options);
+            RunResult result =
+                    BenchmarkRun.execute(
+                            instance,
+                            plan,
+                            outputDirectory,
+                            Duration.ofSeconds(
+                                    Long.parseLong(options.getOrDefault("timeout", "900"))));
+
+            BenchmarkRun.print(result);
+            System.out.printf("%nresults written to %s%n", outputDirectory);
+            if (!result.complete()) {
+                // A partial run is not a successful run, and an unattended schedule chaining
+                // invocations has nothing to read but the exit code.
+                System.exit(2);
+            }
 
         } catch (LaunchException e) {
             System.err.println("launch failed: " + e.getMessage());
@@ -51,6 +87,45 @@ public final class Main {
             System.err.println("failed: " + e);
             System.exit(1);
         }
+    }
+
+    /**
+     * The single-scenario plan 0.x can express.
+     *
+     * <p>Config-driven plans, multiple scenarios and named presets arrive with the experiment
+     * model. Until then this is deliberately one hard-coded shape rather than a half-built config
+     * format nobody has needed yet.
+     */
+    private static RunPlan plan(String runId, Path outputDirectory, Map<String, String> options) {
+        long seed = Long.parseLong(options.getOrDefault("seed", "1"));
+        Duration capture =
+                Duration.ofSeconds(Long.parseLong(options.getOrDefault("duration", "30")));
+        int renderDistance = Integer.parseInt(options.getOrDefault("render-distance", "12"));
+
+        Preset defaults = Preset.defaults();
+        Preset preset =
+                new Preset(
+                        renderDistance,
+                        renderDistance,
+                        defaults.framerateLimit(),
+                        defaults.vsync(),
+                        defaults.particles(),
+                        defaults.clouds(),
+                        defaults.entityShadows(),
+                        defaults.biomeBlendRadius(),
+                        defaults.fieldOfView());
+
+        ScenarioSpec scenario =
+                new ScenarioSpec(
+                        "resident-render",
+                        List.of(),
+                        new StopCondition.FixedDuration(capture.toMillis()),
+                        Integer.parseInt(options.getOrDefault("repetitions", "1")),
+                        preset,
+                        Pose.lookingDown(0.5, OBSERVATION_ALTITUDE, 0.5),
+                        seed);
+
+        return RunPlan.of(runId, outputDirectory.toString(), List.of(scenario));
     }
 
     private static String required(Map<String, String> options, String name) {
@@ -86,13 +161,17 @@ public final class Main {
                 """
                 laymark runner (protocol v%d)
 
-                Slice 2: launches an instance and confirms the harness connects. Measures nothing.
+                Runs one scenario in a disposable world and reports its frame-time distribution.
 
-                  --profile <name>     Modrinth App profile directory name (required)
-                  --version <id>       version id, e.g. 26.1.2-26.1.2.95 (required)
-                  --root <path>        Modrinth App data directory (default: platform location)
-                  --out <path>         where to write events and game logs
-                  --timeout <seconds>  how long to wait for the handshake (default 300)
+                  --profile <name>        Modrinth App profile directory name (required)
+                  --version <id>          version id, e.g. 26.1.2-26.1.2.95 (required)
+                  --root <path>           Modrinth App data directory (default: platform location)
+                  --out <path>            results root (default: benchmark-results)
+                  --seed <n>              world seed (default 1)
+                  --duration <seconds>    capture window (default 30)
+                  --repetitions <n>       repeats, each in a fresh world (default 1)
+                  --render-distance <n>   chunks, also used as simulation distance (default 12)
+                  --timeout <seconds>     how long to wait for the run (default 900)
                 %n""",
                 Laymark.PROTOCOL_VERSION);
     }
