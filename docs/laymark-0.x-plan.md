@@ -46,7 +46,7 @@ These ship today and produce incorrect behaviour. They come first.
 ### 8 — Correctness pass
 Everything in the table above. §6.1, §6.2, §6.3, §7, §8.4, §9, §10.
 
-### 9 — Selection driver
+### 9 — Selection driver ([#30](https://github.com/lucent-mc/laymark/issues/30))
 The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `Schedule`,
 `RoundTemplate` and `JarProbe` exist in `core` with **no production call site**.
 
@@ -58,6 +58,14 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
 - Report projected run count before starting; branch on conflicts.
 - Promotion order by biggest improver for runtime; selection still by weighted score.
 - Populate per-round history and branch points in the report (§10.5).
+
+Added from the first real two-candidate run (details in #30):
+- Pool a candidate's arms into one t-based measurement per scenario; one composite **score** per
+  candidate, per-scenario comparisons underneath as evidence.
+- Candidate cards in the GUI: score, coloured per-metric deltas (mspt / fps / time-per-chunk),
+  and from round 2 a second row against the *original* baseline as well as the current one.
+- The slate's `armsTotal` becomes the projected total across rounds, so `n/N arms in r/R runs`
+  and the ETA describe the whole experiment.
 
 ### 10 — Parity and output equivalence
 - §9 Stimulus parity as a hard gate, compared **across arms**: world, seed, position, camera,
