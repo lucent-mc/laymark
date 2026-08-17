@@ -20,8 +20,9 @@ import java.util.function.Function;
  * @param id stable; results are keyed by it and {@code dependsOn} refers to it
  * @param dependsOn scenarios that must run first. Dependency implies world reuse, so a scenario
  *     that depends on another cannot run standalone.
- * @param phase which of the four measured phases this scenario is; decides which preconditions
- *     apply and, for two of them, which negative precondition can fail the run
+ * @param measure which phases to capture. One name or a list of them; nothing is measured
+ *     implicitly, so a scenario that wants spawn generation has to say so even though the world
+ *     is always created.
  * @param settings either a name from the config's {@code presets} map or the values written
  *     one field rather than two, so "named and inline at once" is not expressible
  * @param content scene geometry to place before measuring, in declaration order
@@ -29,7 +30,7 @@ import java.util.function.Function;
 public record ScenarioDefinition(
         String id,
         List<String> dependsOn,
-        Phase phase,
+        List<Phase> measure,
         StopSpec stop,
         Integer repetitions,
         PresetRef settings,
@@ -68,7 +69,7 @@ public record ScenarioDefinition(
                 effective,
                 pose == null ? defaultPose() : pose,
                 seed == null ? DEFAULT_SEED : seed,
-                phase == null ? Phase.RESIDENT_RENDER : phase,
+                measure == null || measure.isEmpty() ? List.of(Phase.RESIDENT_RENDER) : measure,
                 generateStructures != null && generateStructures,
                 content);
     }

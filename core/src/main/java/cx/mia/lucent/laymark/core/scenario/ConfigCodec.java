@@ -6,7 +6,9 @@ import com.google.gson.JsonParseException;
 import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.Preset;
+import cx.mia.lucent.laymark.core.json.OneOrMany;
 import cx.mia.lucent.laymark.core.json.StrictEnum;
+import java.util.List;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.plan.PlanException;
 
@@ -35,6 +37,9 @@ public final class ConfigCodec {
                     .registerTypeAdapter(
                             StopCondition.Kind.class, StrictEnum.of(StopCondition.Kind.class))
                     .registerTypeAdapter(TargetRef.class, new TargetRefAdapter())
+                    .registerTypeAdapter(
+                            new com.google.gson.reflect.TypeToken<List<Phase>>() {}.getType(),
+                            new OneOrMany<>(Phase.class))
                     .registerTypeAdapter(Phase.class, StrictEnum.of(Phase.class))
                     .registerTypeAdapter(
                             Preset.ParticleDetail.class, StrictEnum.of(Preset.ParticleDetail.class))

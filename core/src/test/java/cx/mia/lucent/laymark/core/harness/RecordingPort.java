@@ -103,9 +103,24 @@ final class RecordingPort implements HarnessPort {
     StopCondition lastStop;
 
     @Override
+    public void beginCapture() {
+        record("beginCapture");
+    }
+
+    @Override
+    public Measurement endCapture() {
+        record("endCapture");
+        return measurement();
+    }
+
+    @Override
     public Measurement capture(StopCondition stop) {
         record("capture");
         lastStop = stop;
+        return measurement();
+    }
+
+    private Measurement measurement() {
         List<FrameSample> samples = new ArrayList<>();
         List<GpuSample> gpu = new ArrayList<>();
         for (int i = 0; i < framesPerCapture; i++) {

@@ -43,7 +43,7 @@ class ConfigCodecTest {
                                 new ScenarioDefinition(
                                         "traversal",
                                         List.of(),
-                                        Phase.UNGENERATED_TRAVERSAL,
+                                        List.of(Phase.UNGENERATED_TRAVERSAL),
                                         StopSpec.of(StopCondition.Kind.CHUNKS, 512, 120_000),
                                          3,
                                         PresetRef.named("low"),
@@ -82,11 +82,66 @@ class ConfigCodecTest {
     /** An unknown phase name must fail loudly, not silently become the default one. */
     @Test
     void rejectsAnUnknownPhase() {
-        String json =
-                """
-                {"version":1,"scenarios":[{"id":"s","phase":"WARMING_UP"}]}
-                """;
-        assertThrows(PlanException.class, () -> ConfigCodec.read(json));
+        assertThrows(
+                PlanException.class,
+                () ->
+                        ConfigCodec.read(
+                                "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"measure\":\"WARMING_UP\"}]}"));
+        assertThrows(
+                PlanException.class,
+                () ->
+                        ConfigCodec.read(
+                                "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"measure\":[\"WARMING_UP\"]}]}"),
+                "the strict check must survive going through the list adapter");
+    }
+
+    /**
+     * Most scenarios name one phase, so making those carry brackets would be ceremony. The ones
+     * that name several are the reason the field is a list at all.
+     */
+    @Test
+    void readsMeasureAsOnePhaseOrSeveral() {
+        ScenarioConfig one =
+                ConfigCodec.read(
+                        "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"measure\":\"RESIDENT_RENDER\"}]}");
+        assertEquals(List.of(Phase.RESIDENT_RENDER), one.scenarios().get(0).measure());
+
+        ScenarioConfig several =
+                ConfigCodec.read(
+                        """
+                        {"version":1,"scenarios":[{"id":"s",
+                         "measure":["SPAWN_GENERATION","RESIDENT_RENDER"]}]}
+                        """);
+        assertEquals(
+                List.of(Phase.SPAWN_GENERATION, Phase.RESIDENT_RENDER),
+                several.scenarios().get(0).measure(),
+                "order is what the operator wrote; segments run in it");
+    }
+
+    /** A single phase goes back out bare, so reading and writing does not rewrite the config. */
+    @Test
+    void writesOnePhaseWithoutBrackets() {
+        String written =
+                ConfigCodec.write(
+                        ConfigCodec.read(
+                                "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"measure\":\"RESIDENT_RENDER\"}]}"));
+        assertTrue(written.contains("\"measure\": \"RESIDENT_RENDER\""), written);
+    }
+
+    /** Nothing is implicit: a scenario measures what it named, so naming nothing is an error. */
+    @Test
+    void refusesAScenarioThatMeasuresTheSamePhaseTwice() {
+        PlanException e =
+                assertThrows(
+                        PlanException.class,
+                        () ->
+                                ConfigCodec.read(
+                                                """
+                                                {"version":1,"scenarios":[{"id":"s",
+                                                 "measure":["RESIDENT_RENDER","RESIDENT_RENDER"]}]}
+                                                """)
+                                        .resolve("r", "/out"));
+        assertTrue(e.getMessage().contains("same phase twice"), e.getMessage());
     }
 
     /** Preset validation applies to a config too; a typo'd number is caught before any launch. */

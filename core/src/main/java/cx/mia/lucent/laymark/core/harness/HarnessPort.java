@@ -98,6 +98,18 @@ public interface HarnessPort {
     Measurement capture(StopCondition stop);
 
     /**
+     * Opens a capture window without deciding when it ends.
+     *
+     * <p>Split out for spawn generation, whose end is not a target anyone configures — it is the
+     * readiness barrier passing. The window has to be open across {@link #createWorld}, so nothing
+     * can be waited on in between.
+     */
+    void beginCapture();
+
+    /** Closes a window opened by {@link #beginCapture}. */
+    Measurement endCapture();
+
+    /**
      * Saves and leaves the world, releasing its lock.
      *
      * <p>Must tolerate being called when no world is open. It runs in the cleanup path of a

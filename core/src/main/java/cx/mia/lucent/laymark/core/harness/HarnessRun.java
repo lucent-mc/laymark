@@ -7,6 +7,7 @@ import cx.mia.lucent.laymark.core.plan.ScenarioSpec;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.RunResult;
+import cx.mia.lucent.laymark.core.result.PhaseResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -91,16 +92,35 @@ public final class HarnessRun {
 
     private ScenarioResult measure(
             ScenarioSpec scenario, int repetition, WorldSpec world, long startedAt) {
+        List<PhaseResult> segments = new ArrayList<>();
+
         // Settings first. Render distance decides how much work world load itself does, so
         // applying it afterwards would measure a load the preset never governed.
         port.applyPreset(scenario.preset());
-        port.createWorld(world);
 
-        // Spawn generation is a phase, not overhead: mods target spawn-chunk generation
-        // specifically, so the world coming up is itself something a scenario may be measuring.
-        events.accept(
-                new Frame.PhaseEntered(scenario.id(), Phase.SPAWN_GENERATION, System.nanoTime()));
+        // Spawn generation is bracketed around world creation rather than started after it: the
+        // cost mods target is the creation itself, and a window opened once the world exists has
+        // already missed it. Its end is the barrier, not a target anyone configures.
+        boolean measuringSpawn = scenario.measure().contains(Phase.SPAWN_GENERATION);
+        long spawnStartedAt = System.nanoTime();
+        if (measuringSpawn) {
+            events.accept(
+                    new Frame.PhaseEntered(scenario.id(), Phase.SPAWN_GENERATION, spawnStartedAt));
+            port.beginCapture();
+        }
+
+        port.createWorld(world);
         BarrierReport barrier = port.awaitReady(READY_TIMEOUT);
+
+        if (measuringSpawn) {
+            Measurement spawn = port.endCapture();
+            segments.add(
+                    new PhaseResult(
+                            Phase.SPAWN_GENERATION,
+                            spawn,
+                            throttleFlags(spawn),
+                            Duration.ofNanos(System.nanoTime() - spawnStartedAt).toMillis()));
+        }
 
         if (!scenario.content().isEmpty()) {
             // Before positioning and before the barrier is re-confirmed: placing geometry changes
@@ -109,27 +129,38 @@ public final class HarnessRun {
         }
         port.position(scenario.pose());
 
-        requireNegativePrecondition(scenario);
-
         // After applying and loading, not before: the world load runs arbitrary mod code, and a
         // mod that reverts a setting does it there rather than during the setter call.
         PresetReadback readback = port.readPreset(scenario.preset());
         List<String> flags = new ArrayList<>(readback.deviationsFrom(scenario.preset()));
 
-        events.accept(
-                new Frame.PhaseEntered(scenario.id(), scenario.phase(), System.nanoTime()));
-        Measurement measurement = port.capture(captureWindow(scenario));
-        if (!measurement.measured()) {
-            throw new HarnessException("scenario " + scenario.id() + " captured no frames");
+        for (Phase phase : scenario.measure()) {
+            if (phase == Phase.SPAWN_GENERATION) {
+                continue; // already captured, around world creation
+            }
+            requireNegativePrecondition(scenario, phase);
+
+            long phaseStartedAt = System.nanoTime();
+            events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
+            Measurement measurement = port.capture(scenario.stopCondition());
+            if (!measurement.measured()) {
+                throw new HarnessException(
+                        "scenario " + scenario.id() + " captured no frames for " + phase);
+            }
+            segments.add(
+                    new PhaseResult(
+                            phase,
+                            measurement,
+                            throttleFlags(measurement),
+                            Duration.ofNanos(System.nanoTime() - phaseStartedAt).toMillis()));
         }
-        flags.addAll(throttleFlags(measurement));
 
         return ScenarioResult.completed(
                 scenario.id(),
                 repetition,
                 readback,
                 flags,
-                measurement,
+                segments,
                 barrier,
                 Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
     }
@@ -143,8 +174,8 @@ public final class HarnessRun {
      * numbers</strong>. There is nothing in the output to distinguish it from a genuinely fast
      * stack, so it fails the repetition rather than flagging it.
      */
-    private void requireNegativePrecondition(ScenarioSpec scenario) {
-        switch (scenario.phase()) {
+    private void requireNegativePrecondition(ScenarioSpec scenario, Phase phase) {
+        switch (phase) {
             case UNGENERATED_TRAVERSAL -> {
                 if (!port.targetIsUngenerated(scenario.pose())) {
                     throw new HarnessException(

@@ -33,7 +33,7 @@ class ScenarioConfigTest {
         ScenarioSpec only = plan.scenarios().get(0);
         assertEquals("resident", only.id());
         assertEquals(1, only.repetitions());
-        assertEquals(Phase.RESIDENT_RENDER, only.phase());
+        assertEquals(List.of(Phase.RESIDENT_RENDER), only.measure());
         assertEquals(Preset.defaults(), only.preset());
         assertTrue(only.stopCondition().kind() == StopCondition.Kind.TIME);
     }
@@ -143,7 +143,7 @@ class ScenarioConfigTest {
                         new ScenarioDefinition(
                                 "second",
                                 List.of("first"),
-                                Phase.SPAWN_GENERATION,
+                                List.of(Phase.SPAWN_GENERATION),
                                 null, null, null, null, null, null, null));
 
         PlanException e = assertThrows(PlanException.class, () -> resolve(config));
@@ -156,7 +156,7 @@ class ScenarioConfigTest {
                 new ScenarioDefinition(
                         "traversal",
                         List.of(),
-                        Phase.UNGENERATED_TRAVERSAL,
+                        List.of(Phase.UNGENERATED_TRAVERSAL),
                         StopSpec.of(StopCondition.Kind.CHUNKS, 512, 120_000),
                          3,
                         null,
@@ -167,7 +167,7 @@ class ScenarioConfigTest {
 
         ScenarioSpec resolved = resolve(ScenarioConfig.of(definition)).scenarios().get(0);
 
-        assertEquals(Phase.UNGENERATED_TRAVERSAL, resolved.phase());
+        assertEquals(List.of(Phase.UNGENERATED_TRAVERSAL), resolved.measure());
         assertEquals(4242L, resolved.seed());
         assertEquals(3, resolved.repetitions());
         assertEquals(500, resolved.pose().y());

@@ -23,7 +23,7 @@ class PlanCodecTest {
              "vsync":false,"particles":"ALL","clouds":"FANCY",
              "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70},
             "pose":{"x":0.5,"y":200.0,"z":0.5,"yaw":0.0,"pitch":90.0},"seed":0,
-            "phase":"RESIDENT_RENDER","generateStructures":false,"content":[]
+            "measure":["RESIDENT_RENDER"],"generateStructures":false,"content":[]
             """;
 
     static Stream<StopCondition> everyStopCondition() {
@@ -43,7 +43,7 @@ class PlanCodecTest {
                         cx.mia.lucent.laymark.core.harness.Preset.defaults(),
                         cx.mia.lucent.laymark.core.harness.Pose.lookingDown(0.5, 200, 0.5),
                         0L,
-                        cx.mia.lucent.laymark.core.Phase.UNGENERATED_TRAVERSAL,
+                        List.of(cx.mia.lucent.laymark.core.Phase.UNGENERATED_TRAVERSAL),
                         false,
                         List.of());
         return RunPlan.of("run-abc", "out/experiments", List.of(scenario));

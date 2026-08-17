@@ -159,7 +159,7 @@ public final class Main {
                 new ScenarioDefinition(
                         "resident-render",
                         List.of(),
-                        Phase.RESIDENT_RENDER,
+                        List.of(Phase.RESIDENT_RENDER),
                         StopSpec.of(StopCondition.Kind.TIME, captureMillis, 0),
                         Integer.parseInt(options.getOrDefault("repetitions", "1")),
                         PresetRef.inline(preset),

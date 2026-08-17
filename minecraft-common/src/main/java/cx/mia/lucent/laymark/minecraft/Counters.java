@@ -25,9 +25,16 @@ final class Counters {
     static WorkCounters work() {
         Minecraft minecraft = Minecraft.getInstance();
 
+        // Every counter is guarded on there being a world, and that is not defensive padding: a
+        // scenario measuring spawn generation opens its capture *before* the world is created, so
+        // the first reading is always taken with no level loaded. The renderer has no sections to
+        // count then, and asking it anyway is a failure partway into an already-paid-for launch.
+        if (minecraft.level == null) {
+            return new WorkCounters(0, 0, 0);
+        }
+
         int renderedSections = minecraft.levelRenderer.countRenderedSections();
-        int clientChunks =
-                minecraft.level == null ? 0 : minecraft.level.getChunkSource().getLoadedChunksCount();
+        int clientChunks = minecraft.level.getChunkSource().getLoadedChunksCount();
 
         MinecraftServer server = minecraft.getSingleplayerServer();
         int serverChunks = 0;

@@ -353,6 +353,48 @@ public final class MinecraftHarnessPort implements HarnessPort {
     }
 
     @Override
+    public void beginCapture() {
+        MemorySnapshot memoryBefore = Counters.memory();
+        WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
+        spark.start();
+        ClientThread.run(
+                "starting the capture",
+                () -> {
+                    gpuTimer.start();
+                    recorder.start();
+                });
+        openedAt = new Opened(workBefore, memoryBefore);
+    }
+
+    @Override
+    public Measurement endCapture() {
+        Opened opened = openedAt;
+        if (opened == null) {
+            throw new HarnessException("no capture is open");
+        }
+        openedAt = null;
+
+        List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
+        List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
+        SparkStatistics sparkStatistics = spark.stop();
+        WorkCounters workAfter = ClientThread.call("reading work counters", Counters::work);
+
+        return new Measurement(
+                frames,
+                gpu,
+                sparkStatistics,
+                opened.work(),
+                workAfter,
+                opened.memory(),
+                Counters.memory());
+    }
+
+    /** State of the world when the open window started, so its deltas can be taken. */
+    private record Opened(WorkCounters work, MemorySnapshot memory) {}
+
+    private volatile Opened openedAt;
+
+    @Override
     public Measurement capture(StopCondition stop) {
         String throttled = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
         if (throttled != null) {
@@ -363,30 +405,9 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     "framerate was already throttled before the capture began: " + throttled);
         }
 
-        WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
-        MemorySnapshot memoryBefore = Counters.memory();
-
-        // Spark's GC totals are cumulative, so the capture-scoped figure is a difference taken
-        // across the window; its tick statistics are rolling and are read at the end.
-        spark.start();
-        ClientThread.run(
-                "starting the capture",
-                () -> {
-                    gpuTimer.start();
-                    recorder.start();
-                });
-
-        awaitStop(stop, workBefore);
-
-        List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
-        List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
-        SparkStatistics sparkStatistics = spark.stop();
-
-        WorkCounters workAfter = ClientThread.call("reading work counters", Counters::work);
-        MemorySnapshot memoryAfter = Counters.memory();
-
-        return new Measurement(
-                frames, gpu, sparkStatistics, workBefore, workAfter, memoryBefore, memoryAfter);
+        beginCapture();
+        awaitStop(stop, openedAt.work());
+        return endCapture();
     }
 
     /**

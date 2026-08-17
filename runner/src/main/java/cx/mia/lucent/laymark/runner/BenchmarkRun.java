@@ -12,6 +12,7 @@ import cx.mia.lucent.laymark.core.plan.RunPlan;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.ResultCodec;
 import cx.mia.lucent.laymark.core.result.RunResult;
+import cx.mia.lucent.laymark.core.result.PhaseResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
 import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import cx.mia.lucent.laymark.runner.launch.GameProcess;
@@ -256,12 +257,24 @@ public final class BenchmarkRun {
     }
 
     private static void printScenario(ScenarioResult scenario) {
-        Measurement measurement = scenario.measurement();
+        System.out.printf(
+                "  %-24s barrier %dms%n",
+                scenario.scenarioId() + "#" + scenario.repetition(),
+                scenario.barrier().totalMillis());
+        scenario.segments().forEach(BenchmarkRun::printSegment);
+        for (String flag : scenario.flags()) {
+            System.out.printf("      ! %s%n", flag);
+        }
+    }
+
+    /** One line per measured phase, then its channels beneath. */
+    private static void printSegment(PhaseResult segment) {
+        Measurement measurement = segment.measurement();
         FrameStatistics frames = measurement.frameStatistics();
 
         System.out.printf(
-                "  %-24s %5d frames  mean %6.2fms (%5.1f fps)  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
-                scenario.scenarioId() + "#" + scenario.repetition(),
+                "    %-22s %5d frames  mean %6.2fms (%5.1f fps)  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
+                segment.phase(),
                 frames.count(),
                 frames.meanMillis(),
                 frames.meanFramesPerSecond(),
@@ -305,7 +318,7 @@ public final class BenchmarkRun {
                                     .formatted(spark.totalCollections(), spark.totalGcMillis()));
         }
 
-        for (String flag : scenario.flags()) {
+        for (String flag : segment.flags()) {
             System.out.printf("      ! %s%n", flag);
         }
     }

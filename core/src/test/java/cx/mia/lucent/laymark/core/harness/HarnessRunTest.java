@@ -31,9 +31,16 @@ class HarnessRunTest {
                 Preset.defaults(),
                 Pose.lookingDown(100.5, 120, -64.5),
                 42L,
-                Phase.RESIDENT_RENDER,
+                List.of(Phase.RESIDENT_RENDER),
                 false,
                 List.of());
+    }
+
+    private List<Phase> phasesEntered() {
+        return frames.stream()
+                .filter(Frame.PhaseEntered.class::isInstance)
+                .map(f -> ((Frame.PhaseEntered) f).phase())
+                .toList();
     }
 
     private RunResult run(ScenarioSpec... scenarios) {
@@ -95,14 +102,10 @@ class HarnessRunTest {
     void emitsTheScenarioLifecycleInOrder() {
         run(scenario("resident", 1));
         assertEquals(
-                List.of("ScenarioStarted", "PhaseEntered", "PhaseEntered", "ScenarioFinished"),
-                frames.stream().map(f -> f.getClass().getSimpleName()).toList());
-        List<Phase> phases =
-                frames.stream()
-                        .filter(Frame.PhaseEntered.class::isInstance)
-                        .map(f -> ((Frame.PhaseEntered) f).phase())
-                        .toList();
-        assertEquals(List.of(Phase.SPAWN_GENERATION, Phase.RESIDENT_RENDER), phases);
+                List.of("ScenarioStarted", "PhaseEntered", "ScenarioFinished"),
+                frames.stream().map(f -> f.getClass().getSimpleName()).toList(),
+                "nothing is measured implicitly, so only the declared phase is entered");
+        assertEquals(List.of(Phase.RESIDENT_RENDER), phasesEntered());
     }
 
     @Test
@@ -146,7 +149,9 @@ class HarnessRunTest {
         ScenarioResult only = run(scenario("resident", 1)).scenarios().get(0);
 
         assertEquals(ScenarioResult.Outcome.COMPLETED_WITH_FLAGS, only.outcome());
-        assertTrue(only.flags().toString().contains("SHORT_AFK"), only.flags().toString());
+        assertTrue(
+                only.segments().get(0).flags().toString().contains("SHORT_AFK"),
+                "a throttle belongs to the phase it happened in, not to the scenario");
         assertTrue(only.measured(), "throttled samples are still samples, just qualified ones");
     }
 
@@ -162,8 +167,8 @@ class HarnessRunTest {
 
         assertEquals(ScenarioResult.Outcome.COMPLETED_WITH_FLAGS, only.outcome());
         assertTrue(
-                only.flags().toString().contains("include time from before it"),
-                only.flags().toString());
+                only.segments().get(0).flags().toString().contains("include time from before it"),
+                only.segments().get(0).flags().toString());
     }
 
     /** A chunk target in a phase that loads no chunks can never complete; catch it at parse. */
@@ -181,7 +186,7 @@ class HarnessRunTest {
                                         Preset.defaults(),
                                         Pose.lookingDown(0.5, 200, 0.5),
                                         1L,
-                                        Phase.RESIDENT_RENDER,
+                                        List.of(Phase.RESIDENT_RENDER),
                                         false,
                                         List.of()));
         assertTrue(e.getMessage().contains("never be reached"), e.getMessage());
@@ -190,7 +195,8 @@ class HarnessRunTest {
     /** Every channel reaches the result, whatever the scenario asked to be scored on. */
     @Test
     void recordsEveryChannelNotJustTheScoredOne() {
-        Measurement measurement = run(scenario("resident", 1)).scenarios().get(0).measurement();
+        Measurement measurement =
+                run(scenario("resident", 1)).scenarios().get(0).segments().get(0).measurement();
 
         assertFalse(measurement.frames().isEmpty());
         assertFalse(measurement.gpu().isEmpty(), "gpu timings are recorded, not requested");
@@ -208,7 +214,7 @@ class HarnessRunTest {
                 Preset.defaults(),
                 Pose.lookingDown(0.5, 200, 0.5),
                 7L,
-                phase,
+                List.of(phase),
                 false,
                 List.of());
     }
@@ -256,12 +262,7 @@ class HarnessRunTest {
     void reportsTheDeclaredPhaseRatherThanAFixedOne() {
         run(phased("traversal", Phase.UNGENERATED_TRAVERSAL));
 
-        List<Phase> phases =
-                frames.stream()
-                        .filter(Frame.PhaseEntered.class::isInstance)
-                        .map(f -> ((Frame.PhaseEntered) f).phase())
-                        .toList();
-        assertEquals(List.of(Phase.SPAWN_GENERATION, Phase.UNGENERATED_TRAVERSAL), phases);
+        assertEquals(List.of(Phase.UNGENERATED_TRAVERSAL), phasesEntered());
     }
 
     /** Geometry changes what there is to build, so a barrier satisfied before it means nothing. */
@@ -276,7 +277,7 @@ class HarnessRunTest {
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 200, 0.5),
                         7L,
-                        Phase.RESIDENT_RENDER,
+                        List.of(Phase.RESIDENT_RENDER),
                         false,
                         List.of(new ScenePlacement("scenes/pen.schem", 0, 64, 0)));
 
@@ -342,7 +343,7 @@ class HarnessRunTest {
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
                          1L,
-                        Phase.UNGENERATED_TRAVERSAL,
+                        List.of(Phase.UNGENERATED_TRAVERSAL),
                         false,
                         List.of());
 
@@ -364,7 +365,7 @@ class HarnessRunTest {
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
                         1L,
-                        Phase.RESIDENT_RENDER,
+                        List.of(Phase.RESIDENT_RENDER),
                         false,
                         List.of());
 
