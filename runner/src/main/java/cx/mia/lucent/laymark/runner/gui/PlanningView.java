@@ -71,6 +71,7 @@ public final class PlanningView extends JPanel {
             Set<String> baseline,
             Set<String> candidates,
             Map<String, Set<String>> requires,
+            List<cx.mia.lucent.laymark.core.select.Branching.Conflict> conflicts,
             Schedule schedule,
             Map<String, String> displayNames) {}
 
@@ -110,10 +111,13 @@ public final class PlanningView extends JPanel {
     private final JTextField search = new JTextField(18);
     private final JPanel presetRow = row();
 
+    private final cx.mia.lucent.laymark.runner.select.ProbeCache probeCache =
+            cx.mia.lucent.laymark.runner.select.ProbeCache.open();
     private DependencyGraph graph;
     private Map<String, String> modIdByFile = Map.of();
     private Map<String, String> fileByModId = Map.of();
     private Map<String, String> displayNameByFile = Map.of();
+    private List<cx.mia.lucent.laymark.core.select.Branching.Conflict> conflicts = List.of();
     private final Path root;
     private final String hereProfile;
 
@@ -600,6 +604,7 @@ public final class PlanningView extends JPanel {
         modIdByFile = Map.of();
         fileByModId = Map.of();
         displayNameByFile = Map.of();
+        conflicts = List.of();
         Path mods = gameDirectory.resolve("mods");
         if (!Files.isDirectory(mods)) {
             return;
@@ -609,13 +614,28 @@ public final class PlanningView extends JPanel {
                     JarProbe.inspect(
                             jars.filter(Files::isRegularFile)
                                     .filter(path -> path.getFileName().toString().endsWith(".jar"))
-                                    .toList());
-            graph = probed.graph();
+                                    .toList(),
+                            probeCache);
+            probeCache.persist();
+            var overrides =
+                    cx.mia.lucent.laymark.runner.select.DependencyOverrides.load(gameDirectory);
+            // Merged with the jars winning on any shared edge: an operator's memory goes stale
+            // faster than a manifest. Overrides exist for the edge no manifest declares.
+            graph = DependencyGraph.merge(probed.graph(), overrides.graph());
             modIdByFile = probed.modIdByFile();
             displayNameByFile = probed.displayNameByFile();
-            Map<String, String> reversed = new LinkedHashMap<>();
-            modIdByFile.forEach((file, modId) -> reversed.putIfAbsent(modId, file));
-            fileByModId = reversed;
+            fileByModId = probed.providerByModId();
+
+            List<cx.mia.lucent.laymark.core.select.Branching.Conflict> all =
+                    new java.util.ArrayList<>(probed.conflicts());
+            for (var conflict : overrides.conflicts()) {
+                String a = fileByModId.get(conflict.a());
+                String b = fileByModId.get(conflict.b());
+                if (a != null && b != null) {
+                    all.add(new cx.mia.lucent.laymark.core.select.Branching.Conflict(a, b));
+                }
+            }
+            conflicts = List.copyOf(all);
         } catch (java.io.IOException | RuntimeException e) {
             // Without a graph the roster still works; it just stops offering to keep itself
             // loadable, which is better than refusing to plan a run.
@@ -908,6 +928,7 @@ public final class PlanningView extends JPanel {
                 baseline,
                 named(Role.CANDIDATE),
                 requires,
+                conflicts,
                 parsed,
                 Map.copyOf(displayNameByFile));
     }
