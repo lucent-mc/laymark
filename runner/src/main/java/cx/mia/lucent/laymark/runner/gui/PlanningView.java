@@ -1,6 +1,7 @@
 package cx.mia.lucent.laymark.runner.gui;
 
 import cx.mia.lucent.laymark.core.experiment.Schedule;
+import cx.mia.lucent.laymark.runner.launch.InstalledVersion;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
 import cx.mia.lucent.laymark.runner.materialize.ModsDirectory;
 import java.awt.BorderLayout;
@@ -25,7 +26,9 @@ import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JSpinner;
 import javax.swing.JTextField;
+import javax.swing.SpinnerNumberModel;
 
 /**
  * What to benchmark, chosen before anything launches.
@@ -53,6 +56,7 @@ public final class PlanningView extends JPanel {
     private static final String NO_VERSION = "— pick one —";
     private static final String VERSION_KEY = "version.";
     private static final String SCHEDULE_KEY = "schedule";
+    private static final String INTERVAL_KEY = "baselineInterval";
     private static final String DEFAULT_SCHEDULE = "A,B,C,B,C";
     private static final java.util.prefs.Preferences PREFERENCES =
             java.util.prefs.Preferences.userRoot().node("cx/mia/lucent/laymark");
@@ -62,6 +66,22 @@ public final class PlanningView extends JPanel {
     private final JTextField config = new JTextField(38);
     private final JTextField schedule =
             new JTextField(PREFERENCES.get(SCHEDULE_KEY, DEFAULT_SCHEDULE), 16);
+
+    /**
+     * How many candidate arms may pass before a baseline is re-established.
+     *
+     * <p>Baselines are the drift checks, so this is what bounds thermal drift: a wider interval
+     * spends fewer arms on checking and voids more results when a check fails. It applies on top of
+     * whatever the schedule says, because a template alone does not scale — at twenty candidates a
+     * single {@code B} sits hours from the arms it is meant to bound. 1 means strict alternation.
+     */
+    private final JSpinner baselineInterval =
+            new JSpinner(
+                    new SpinnerNumberModel(
+                            PREFERENCES.getInt(INTERVAL_KEY, Schedule.DEFAULT_BASELINE_INTERVAL),
+                            1,
+                            99,
+                            1));
 
     private final JPanel modList = new JPanel();
     private final JLabel modCount = Theme.muted("");
@@ -104,7 +124,7 @@ public final class PlanningView extends JPanel {
             profiles.addItem(profile);
         }
         versions.addItem(NO_VERSION);
-        for (String version : directories(root.resolve("meta").resolve("versions"))) {
+        for (String version : installedVersions()) {
             versions.addItem(version);
         }
         if (hereProfile != null) {
@@ -136,9 +156,12 @@ public final class PlanningView extends JPanel {
         JPanel bottom = row();
         bottom.add(Theme.muted("schedule"));
         bottom.add(schedule);
+        bottom.add(Theme.muted("baseline every"));
+        bottom.add(baselineInterval);
+        bottom.add(Theme.muted("arms"));
         // The legend is the documentation. A schedule field with no key beside it is a field people
         // leave alone.
-        bottom.add(Theme.muted("A acclimation   B baseline   C a pass over the candidates   CC twice each"));
+        bottom.add(Theme.muted("— A acclimation, B baseline, C a pass over the candidates, CC twice each"));
 
         fields.add(top);
         fields.add(middle);
@@ -219,9 +242,23 @@ public final class PlanningView extends JPanel {
      */
     private void recallVersion() {
         String profile = (String) profiles.getSelectedItem();
-        String remembered = profile == null ? null : PREFERENCES.get(VERSION_KEY + profile, null);
+        if (profile == null) {
+            versions.setSelectedItem(NO_VERSION);
+            return;
+        }
+        // Detection first, memory second: the profile's own logs describe what it runs now, whereas
+        // a remembered answer describes what it ran when someone last said so.
+        String detected =
+                InstalledVersion.detect(
+                        root.resolve("profiles").resolve(profile), installedVersions());
+        String remembered = PREFERENCES.get(VERSION_KEY + profile, null);
+        String chosen = detected != null ? detected : remembered;
         versions.setSelectedItem(
-                remembered != null && contains(versions, remembered) ? remembered : NO_VERSION);
+                chosen != null && contains(versions, chosen) ? chosen : NO_VERSION);
+    }
+
+    private List<String> installedVersions() {
+        return directories(root.resolve("meta").resolve("versions"));
     }
 
     private void rememberVersion() {
@@ -289,13 +326,20 @@ public final class PlanningView extends JPanel {
         }
         Schedule parsed;
         try {
-            parsed = Schedule.of(schedule.getText());
+            parsed = schedule();
         } catch (RuntimeException e) {
             return null;
         }
         PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
+        PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue());
         return new Choice(
                 new ModrinthInstance(root, profile, version), selected(), configPath(), parsed);
+    }
+
+    private Schedule schedule() {
+        return new Schedule(
+                cx.mia.lucent.laymark.core.experiment.RoundTemplate.parse(schedule.getText()),
+                (Integer) baselineInterval.getValue());
     }
 
     private Path configPath() {
@@ -324,7 +368,7 @@ public final class PlanningView extends JPanel {
             return "No scenario config at " + configPath() + ".";
         }
         try {
-            Schedule.of(schedule.getText());
+            schedule();
         } catch (RuntimeException e) {
             return e.getMessage();
         }
