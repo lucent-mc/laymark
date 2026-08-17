@@ -315,11 +315,14 @@ public final class PlanningView extends JPanel {
      * it is said here rather than assumed away.
      */
     private void warnIfIndexIsStale(Set<String> added) {
-        if (added == null) {
+        String profile = (String) profiles.getSelectedItem();
+        if (added == null || profile == null) {
             return;
         }
+        // Against everything installed, not against the roster: the instrumentation is installed
+        // and hidden from the roster deliberately, which must not read as "missing".
         Set<String> unmatched = new TreeSet<>(added);
-        unmatched.removeAll(roles.keySet());
+        unmatched.removeAll(enabledMods(root.resolve("profiles").resolve(profile)));
         if (unmatched.isEmpty()) {
             return;
         }
