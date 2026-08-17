@@ -574,38 +574,49 @@ public final class PlanningView extends JPanel {
     }
 
     /**
-     * The installed mods an operator may assign, which excludes Laymark's own.
+     * The instrumentation, which is not up for assignment.
      *
-     * <p>The harness has to load in every arm — it is what produces the measurements — so offering
-     * it as a candidate offers a run that cannot report anything, and offering it as "off" offers
-     * one that cannot start. It is added to the baseline in {@link #choice()} instead.
+     * <p>Laymark is what produces the measurements, and Spark and Chunky are what it measures
+     * through — pinned dependencies rather than mods anyone chose. Offering one as a candidate
+     * offers a run that reports nothing, and offering it as "off" offers a run that cannot start,
+     * so all three are held in the baseline and kept out of the list.
      */
+    private static final Set<String> INSTRUMENTATION = Set.of("laymark", "spark", "chunky");
+
+    /** The installed mods an operator may assign. */
     private Set<String> installed(Path gameDirectory) {
-        if (!Files.isDirectory(gameDirectory)) {
-            return Set.of();
-        }
-        Set<String> names = new TreeSet<>(new ModsDirectory(gameDirectory).read().enabledNames());
-        names.removeIf(PlanningView::isHarness);
+        Set<String> names = enabledMods(gameDirectory);
+        names.removeIf(this::isInstrumentation);
         return names;
     }
 
-    private static boolean isHarness(String fileName) {
-        return fileName.toLowerCase(Locale.ROOT).startsWith("laymark-");
-    }
-
-    /** Every installed mod, including the harness, so it can be put back in the baseline. */
-    private Set<String> harnessMods() {
+    /** Held in the baseline whatever the roster says. */
+    private Set<String> instrumentation() {
         String profile = (String) profiles.getSelectedItem();
         if (profile == null) {
             return Set.of();
         }
-        Path gameDirectory = root.resolve("profiles").resolve(profile);
-        if (!Files.isDirectory(gameDirectory)) {
-            return Set.of();
-        }
-        Set<String> names = new TreeSet<>(new ModsDirectory(gameDirectory).read().enabledNames());
-        names.removeIf(name -> !isHarness(name));
+        Set<String> names = enabledMods(root.resolve("profiles").resolve(profile));
+        names.removeIf(name -> !isInstrumentation(name));
         return names;
+    }
+
+    /**
+     * By mod id, from the jar's own manifest — the file name is a packaging choice, and a build of
+     * Spark named anything at all still declares itself {@code spark}.
+     */
+    private boolean isInstrumentation(String fileName) {
+        String modId = modIdByFile.get(fileName);
+        return modId != null
+                ? INSTRUMENTATION.contains(modId)
+                : INSTRUMENTATION.stream()
+                        .anyMatch(known -> fileName.toLowerCase(Locale.ROOT).startsWith(known));
+    }
+
+    private Set<String> enabledMods(Path gameDirectory) {
+        return Files.isDirectory(gameDirectory)
+                ? new TreeSet<>(new ModsDirectory(gameDirectory).read().enabledNames())
+                : new TreeSet<>();
     }
 
     private static List<String> directories(Path parent) {
@@ -652,7 +663,7 @@ public final class PlanningView extends JPanel {
         PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
         PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue());
         Set<String> baseline = named(Role.BASELINE);
-        baseline.addAll(harnessMods());
+        baseline.addAll(instrumentation());
         return new Choice(
                 new ModrinthInstance(root, profile, version),
                 baseline,
