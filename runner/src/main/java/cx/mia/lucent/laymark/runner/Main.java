@@ -117,8 +117,7 @@ public final class Main {
                             plan,
                             outputDirectory,
                             sceneRoot(options),
-                            Duration.ofSeconds(
-                                    Long.parseLong(options.getOrDefault("timeout", "900"))),
+                            timeout(options, plan),
                             control,
                             listener);
             listener.runFinished(0, arm, 0, false);
@@ -217,7 +216,9 @@ public final class Main {
                     choice.participants(),
                     outputDirectory,
                     choice.config().toAbsolutePath().getParent(),
-                    Duration.ofSeconds(900),
+                    // From the plan, not a constant. A fixed ceiling shorter than the captures it
+                    // contains kills the game part-way and reports the result as a hang.
+                    plan.timeout(),
                     control,
                     listener);
             System.out.printf("%nreport written to %s%n", outputDirectory.resolve("report.md"));
@@ -298,7 +299,7 @@ public final class Main {
                         installed,
                         outputDirectory,
                         sceneRoot,
-                        Duration.ofSeconds(Long.parseLong(options.getOrDefault("timeout", "900"))),
+                        timeout(options, plan),
                         control,
                         listener);
 
@@ -325,6 +326,19 @@ public final class Main {
             System.exit(2);
         }
         System.out.printf("report written to %s%n", outputDirectory.resolve("report.md"));
+    }
+
+    /**
+     * How long to wait for one launch: what was asked for, or what the plan says it needs.
+     *
+     * <p>Derived by default rather than fixed, because a scenario already states its own ceiling
+     * and a shorter launch timeout would kill the game part-way and report the run as a hang.
+     */
+    private static Duration timeout(Map<String, String> options, RunPlan plan) {
+        String requested = options.get("timeout");
+        return requested == null || requested.isBlank()
+                ? plan.timeout()
+                : Duration.ofSeconds(Long.parseLong(requested));
     }
 
     /** Scene paths are relative to the config that declared them, or to the working directory. */
@@ -422,7 +436,8 @@ public final class Main {
                   --duration <seconds>    capture window (default 30)
                   --repetitions <n>       repeats, each in a fresh world (default 1)
                   --render-distance <n>   chunks, also used as simulation distance (default 12)
-                  --timeout <seconds>     how long to wait for the run (default 900)
+                  --timeout <seconds>     how long to wait for the run; by default derived from
+                          the scenarios' own stop timeouts plus a launch allowance
   --gui                   open a window with status, schedule, and pause/stop
   --selftest              run N identical baselines and check none beats another
   --arms <n>              how many baselines the self-test uses (default 4)

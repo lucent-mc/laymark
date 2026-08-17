@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "settingsPresets": {
+    "far": {
+      "renderDistance": 32,
+      "fieldOfView": 110
+    }
+  },
+  "scenarios": [
+    {
+      "id": "chunk-generation",
+      "measure": "UNGENERATED_TRAVERSAL",
+      "settings": "far",
+      "seed": 1,
+      "pose": { "x": 0.5, "y": 500.0, "z": 0.5, "yaw": 0.0, "pitch": 90.0 },
+      "stop": { "kind": "CHUNKS", "target": "all-in-radius", "timeout": 1800000 },
+      "repetitions": 1
+    },
+    {
+      "id": "chunk-loading",
+      "dependsOn": ["chunk-generation"],
+      "measure": "GENERATED_STREAMING",
+      "settings": "far",
+      "seed": 1,
+      "pose": { "x": 0.5, "y": 500.0, "z": 0.5, "yaw": 0.0, "pitch": 90.0 },
+      "stop": { "kind": "CHUNKS", "target": "all-in-radius", "timeout": 600000 },
+      "repetitions": 1
+    }
+  ]
+}
