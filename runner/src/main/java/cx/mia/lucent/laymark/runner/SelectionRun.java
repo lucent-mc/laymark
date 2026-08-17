@@ -255,6 +255,12 @@ public final class SelectionRun {
                     }
                     listener.runFinished(
                             sequence, arm, counted == 0 ? 0 : total / counted, counted == 0);
+                    if (arm.kind() == Arm.Kind.CANDIDATE) {
+                        Double preliminary = preliminaryPercent(arm.id(), measured);
+                        if (preliminary != null) {
+                            listener.preliminaryScore(arm.id(), preliminary);
+                        }
+                    }
                     sequence++;
                 }
                 if (stopped) {
@@ -500,6 +506,39 @@ public final class SelectionRun {
                 spark == null ? null : spark.millisPerTickMean(),
                 segment.summaries().interval().meanFramesPerSecond(),
                 segment.summaries().millisPerChunkReceived());
+    }
+
+    /**
+     * The candidate's mean percent versus this round's baseline runs so far; null before any
+     * baseline has been measured. Positive is faster, matching how improvements read everywhere
+     * else.
+     */
+    private static Double preliminaryPercent(String armId, List<Measured> measured) {
+        List<Double> percents = new ArrayList<>();
+        for (String scenarioId :
+                measured.stream().map(Measured::scenarioId).distinct().toList()) {
+            double[] baseline =
+                    measured.stream()
+                            .filter(m -> m.armId().equals("baseline"))
+                            .filter(m -> m.scenarioId().equals(scenarioId))
+                            .mapToDouble(Measured::scoredMillis)
+                            .toArray();
+            double[] own =
+                    measured.stream()
+                            .filter(m -> m.armId().equals(armId))
+                            .filter(m -> m.scenarioId().equals(scenarioId))
+                            .mapToDouble(Measured::scoredMillis)
+                            .toArray();
+            if (baseline.length == 0 || own.length == 0) {
+                continue;
+            }
+            double baselineMean = java.util.Arrays.stream(baseline).average().orElseThrow();
+            double ownMean = java.util.Arrays.stream(own).average().orElseThrow();
+            percents.add((baselineMean - ownMean) / baselineMean * 100.0);
+        }
+        return percents.isEmpty()
+                ? null
+                : percents.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
     }
 
     /** Relative spread of this round's baseline runs on one scenario, as a percent; null below n=2. */

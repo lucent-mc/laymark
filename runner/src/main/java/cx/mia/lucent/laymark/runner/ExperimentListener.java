@@ -48,6 +48,16 @@ public interface ExperimentListener {
     default void runFinished(int sequence, Arm arm, double scoredMillis, boolean failed) {}
 
     /**
+     * A candidate's standing while the round is still running: mean percent versus the baseline
+     * arms measured so far, positive is faster.
+     *
+     * <p>A point estimate with no interval and no band — preliminary by name and by nature. It
+     * exists because the alternative shown mid-round was a raw millisecond average, which reads
+     * as a result while meaning nothing. The round's close replaces it with the real comparison.
+     */
+    default void preliminaryScore(String id, double improvementPercent) {}
+
+    /**
      * One candidate's round in summary: the score a card leads with, the metric deltas beneath it,
      * and the verdict that decided its fate.
      *

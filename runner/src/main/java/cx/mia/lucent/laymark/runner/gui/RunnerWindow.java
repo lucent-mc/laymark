@@ -486,14 +486,20 @@ public final class RunnerWindow implements ExperimentListener {
                     if (row != null) {
                         row.set(failed ? "Failed" : "Done", failed ? Theme.BAD : Theme.GOOD, !failed);
                     }
-                    if (!failed && arm.kind() == Arm.Kind.CANDIDATE) {
-                        // Provisional, in raw milliseconds; the round's close replaces it with the
-                        // paired percentage, which is the number that actually means something.
-                        liveScores.merge(arm.id(), scoredMillis, (a, b) -> (a + b) / 2);
-                        renderLiveColumn();
-                    }
                     updateProgress();
                     updateEstimate();
+                    refresh();
+                });
+    }
+
+    @Override
+    public void preliminaryScore(String id, double improvementPercent) {
+        // A percent against the baseline measured so far -- a raw millisecond figure mid-round
+        // read as a result while meaning nothing. Preliminary by name until the round closes.
+        SwingUtilities.invokeLater(
+                () -> {
+                    liveScores.put(id, improvementPercent);
+                    renderLiveColumn();
                     refresh();
                 });
     }
@@ -665,14 +671,17 @@ public final class RunnerWindow implements ExperimentListener {
         liveRows.removeAll();
         int[] rank = {0};
         liveScores.entrySet().stream()
-                .sorted(Map.Entry.comparingByValue())
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
                 .forEach(
                         entry ->
                                 liveRows.add(
                                         resultRow(
                                                 ++rank[0],
                                                 display(entry.getKey()),
-                                                String.format(Locale.ROOT, "%.1f ms", entry.getValue()),
+                                                String.format(
+                                                        Locale.ROOT,
+                                                        "%+.1f%%  so far",
+                                                        entry.getValue()),
                                                 false)));
     }
 
@@ -729,17 +738,7 @@ public final class RunnerWindow implements ExperimentListener {
         headline.add(scoreLabel, BorderLayout.EAST);
         card.add(headline);
 
-        JPanel metrics = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
-        metrics.setOpaque(false);
-        metrics.setAlignmentX(Component.LEFT_ALIGNMENT);
-        // Lower is better for mspt and ms/chunk, higher for fps: green means "moved the way you
-        // want", not "went up".
-        metricLabel(metrics, "mspt", score.msptDelta(), "%+.1f", true);
-        metricLabel(metrics, "fps", score.fpsDelta(), "%+.0f", false);
-        metricLabel(metrics, "ms/chunk", score.msPerChunkDelta(), "%+.2f", true);
-        JLabel verdict = Theme.small(score.verdict());
-        metrics.add(verdict);
-        card.add(metrics);
+        card.add(statsGrid(score, comparisons));
 
         if (score.vsOriginalPercent() != null) {
             JLabel vsOriginal =
@@ -752,19 +751,9 @@ public final class RunnerWindow implements ExperimentListener {
             vsOriginal.setAlignmentX(Component.LEFT_ALIGNMENT);
             card.add(vsOriginal);
         }
-
-        for (Comparison comparison : comparisons) {
-            JLabel scenario =
-                    Theme.small(
-                            String.format(
-                                    Locale.ROOT,
-                                    "%s  %+.1f%%  %s",
-                                    comparison.scenarioId(),
-                                    comparison.improvementPercent(),
-                                    band(comparison)));
-            scenario.setAlignmentX(Component.LEFT_ALIGNMENT);
-            card.add(scenario);
-        }
+        JLabel verdict = Theme.small(score.verdict());
+        verdict.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(verdict);
 
         JPanel spacer = new JPanel(new BorderLayout());
         spacer.setOpaque(false);
@@ -775,17 +764,107 @@ public final class RunnerWindow implements ExperimentListener {
         return spacer;
     }
 
-    private void metricLabel(
-            JPanel into, String name, Double value, String format, boolean lowerIsBetter) {
-        if (value == null) {
-            return;
+    /**
+     * The card's numbers as an actual grid: one column per metric and per scenario, headers over
+     * values, everything aligned. A flowed line of "mspt −0.8 fps +330" reads token by token; a
+     * grid reads at a glance and compares down a column across cards.
+     */
+    private JPanel statsGrid(CandidateScore score, List<Comparison> comparisons) {
+        record Column(String header, String tooltip, String value, Color colour) {}
+        List<Column> columns = new ArrayList<>();
+
+        // Lower is better for mspt and ms/chunk, higher for fps: green means "moved the way you
+        // want", not "went up".
+        if (score.msptDelta() != null) {
+            columns.add(
+                    new Column(
+                            "mspt",
+                            "server mean tick time, delta vs baseline",
+                            String.format(Locale.ROOT, "%+.1f", score.msptDelta()),
+                            direction(score.msptDelta(), true)));
         }
-        boolean better = lowerIsBetter ? value < 0 : value > 0;
-        JLabel label =
-                Theme.mono(
-                        name + " " + String.format(Locale.ROOT, format, value),
-                        value == 0 ? Theme.MUTED : better ? Theme.GOOD : Theme.BAD);
-        into.add(label);
+        if (score.fpsDelta() != null) {
+            columns.add(
+                    new Column(
+                            "fps",
+                            "mean framerate, delta vs baseline",
+                            String.format(Locale.ROOT, "%+.0f", score.fpsDelta()),
+                            direction(score.fpsDelta(), false)));
+        }
+        if (score.msPerChunkDelta() != null) {
+            columns.add(
+                    new Column(
+                            "ms/ch",
+                            "time per chunk received, delta vs baseline",
+                            String.format(Locale.ROOT, "%+.2f", score.msPerChunkDelta()),
+                            direction(score.msPerChunkDelta(), true)));
+        }
+        for (Comparison comparison :
+                comparisons.stream()
+                        .sorted(java.util.Comparator.comparing(Comparison::scenarioId))
+                        .toList()) {
+            columns.add(
+                    new Column(
+                            abbreviate(comparison.scenarioId()),
+                            comparison.scenarioId() + ": " + comparison.describe(),
+                            String.format(
+                                    Locale.ROOT, "%+.1f%%", comparison.improvementPercent()),
+                            bandColour(comparison)));
+        }
+
+        JPanel grid = new JPanel(new java.awt.GridLayout(2, columns.size(), 12, 0));
+        grid.setOpaque(false);
+        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
+        for (Column column : columns) {
+            JLabel header = Theme.small(column.header());
+            header.setToolTipText(column.tooltip());
+            grid.add(header);
+        }
+        for (Column column : columns) {
+            JLabel value = Theme.mono(column.value(), column.colour());
+            value.setToolTipText(column.tooltip());
+            grid.add(value);
+        }
+        grid.setMaximumSize(grid.getPreferredSize());
+        return grid;
+    }
+
+    private static Color direction(double delta, boolean lowerIsBetter) {
+        if (delta == 0) {
+            return Theme.MUTED;
+        }
+        return (lowerIsBetter ? delta < 0 : delta > 0) ? Theme.GOOD : Theme.BAD;
+    }
+
+    /** The band decides the colour, because the band is what says the percentage is real. */
+    private static Color bandColour(Comparison comparison) {
+        return switch (comparison.band()) {
+            case IMPROVED -> Theme.GOOD;
+            case REGRESSED -> Theme.BAD;
+            case NEGLIGIBLE, NO_MEASURABLE_DIFFERENCE -> Theme.MUTED;
+        };
+    }
+
+    /**
+     * "chunk-generation" → "chgn": per hyphenated word, its first letter and the next consonant.
+     * A column header has no room for the full id; the tooltip carries it.
+     */
+    private static String abbreviate(String scenarioId) {
+        StringBuilder out = new StringBuilder();
+        for (String word : scenarioId.split("[-_]")) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            out.append(word.charAt(0));
+            for (int i = 1; i < word.length(); i++) {
+                char c = Character.toLowerCase(word.charAt(i));
+                if ("aeiou".indexOf(c) < 0) {
+                    out.append(word.charAt(i));
+                    break;
+                }
+            }
+        }
+        return out.toString();
     }
 
     private static String band(Comparison comparison) {
