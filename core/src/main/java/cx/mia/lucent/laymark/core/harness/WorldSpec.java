@@ -39,9 +39,20 @@ public record WorldSpec(String levelId, long seed, boolean generateStructures) {
      * <p>Independent scenarios still get a save each per repetition, because two phases have a
      * negative precondition that measuring destroys.
      */
-    public static WorldSpec forRepetition(String runId, String ownerId, int repetition, long seed) {
+    public static WorldSpec forRepetition(
+            String runId,
+            String ownerId,
+            int repetition,
+            long seed,
+            cx.mia.lucent.laymark.core.result.Pass pass) {
+        // The pass is part of the name because both passes have the same negative preconditions:
+        // the warm pass's traversal needs terrain the cold pass never touched.
         return new WorldSpec(
-                sanitize("laymark-" + runId + "-" + ownerId + "-" + repetition), seed, false);
+                sanitize(
+                        "laymark-" + runId + "-" + ownerId + "-" + repetition
+                                + (pass == cx.mia.lucent.laymark.core.result.Pass.WARM ? "w" : "c")),
+                seed,
+                false);
     }
 
     /** Dots are dropped rather than kept: a generated id never needs one, and "." and ".." do. */

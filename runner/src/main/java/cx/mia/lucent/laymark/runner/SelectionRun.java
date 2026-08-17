@@ -100,6 +100,11 @@ public final class SelectionRun {
         Boolean sparkProfiler = SparkConfig.disableBackgroundProfiler(instance.gameDirectory());
         long startedAt = System.nanoTime();
 
+        // The machine's remembered wobble widens every interval it applies to, and this run's
+        // baselines feed it for the next run. Widen-only, so staleness costs caution, never a
+        // confident wrong answer.
+        cx.mia.lucent.laymark.core.stats.MachineProfile profile = MachineProfiles.load();
+
         int projectedArms = projectArms(schedule, pool.size());
         int totalRounds = pool.size();
 
@@ -200,6 +205,13 @@ public final class SelectionRun {
                             continue;
                         }
                         requireParity(stimulusReference, arm.id(), scenario);
+                        // Scored on the warm pass only. Cold and warm are different populations --
+                        // one measures a fresh JVM, the other the steady state -- and pooling them
+                        // charges every candidate with a JVM-warmth difference that is not its
+                        // own. The cold pass stays in the result as data.
+                        if (scenario.pass() == cx.mia.lucent.laymark.core.result.Pass.COLD) {
+                            continue;
+                        }
                         double scored = ExperimentRun.scored(scenario, plan);
                         total += scored;
                         counted++;
@@ -225,8 +237,21 @@ public final class SelectionRun {
 
                 List<Drift.VoidWindow> voids = Drift.detect(baselineRuns);
                 allBaselineRuns.addAll(baselineRuns);
+
+                // This round's baseline spread per scenario is the next comparison's floor
+                // evidence: fold it in before comparing, so even round 1 benefits from what its
+                // own drift checks observed.
+                for (String scenarioId :
+                        measured.stream().map(Measured::scenarioId).distinct().toList()) {
+                    Double spread = baselineSpreadPercent(measured, scenarioId);
+                    if (spread != null) {
+                        profile = profile.observe(scenarioId, spread);
+                    }
+                }
+                MachineProfiles.store(profile);
+
                 Map<String, List<Comparison>> byCandidate =
-                        compare(bundles, measured, baselineRuns, voids);
+                        compare(bundles, measured, baselineRuns, voids, profile);
                 byCandidate.values().forEach(allComparisons::addAll);
 
                 // Score against the ORIGINAL baseline too, from round 2 on: the current round's
@@ -374,11 +399,30 @@ public final class SelectionRun {
                 measurement.millisPerChunkReceived());
     }
 
+    /** Relative spread of this round's baseline runs on one scenario, as a percent; null below n=2. */
+    private static Double baselineSpreadPercent(List<Measured> measured, String scenarioId) {
+        double[] values =
+                measured.stream()
+                        .filter(m -> m.armId().equals("baseline"))
+                        .filter(m -> m.scenarioId().equals(scenarioId))
+                        .mapToDouble(Measured::scoredMillis)
+                        .toArray();
+        if (values.length < 2) {
+            return null;
+        }
+        double mean = java.util.Arrays.stream(values).average().orElseThrow();
+        double variance =
+                java.util.Arrays.stream(values).map(v -> (v - mean) * (v - mean)).sum()
+                        / (values.length - 1);
+        return Math.sqrt(variance) / mean * 100.0;
+    }
+
     private static Map<String, List<Comparison>> compare(
             List<Bundle> bundles,
             List<Measured> measured,
             List<Comparison.Run> baselineRuns,
-            List<Drift.VoidWindow> voids) {
+            List<Drift.VoidWindow> voids,
+            cx.mia.lucent.laymark.core.stats.MachineProfile profile) {
 
         Map<String, List<Comparison>> byCandidate = new LinkedHashMap<>();
         for (Bundle bundle : bundles) {
@@ -410,7 +454,8 @@ public final class SelectionRun {
                                 scenarioId,
                                 baseline,
                                 candidate,
-                                Comparison.DEFAULT_FLOOR_PERCENT));
+                                Comparison.DEFAULT_FLOOR_PERCENT,
+                                profile));
             }
             if (!comparisons.isEmpty()) {
                 byCandidate.put(bundle.candidate(), comparisons);

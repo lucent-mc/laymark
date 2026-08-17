@@ -98,7 +98,12 @@ public final class Harness {
         if (flags.size() == result.flags().size()) {
             return result;
         }
-        return new RunResult(result.runId(), result.protocolVersion(), result.scenarios(), flags);
+        return new RunResult(
+                result.runId(),
+                result.protocolVersion(),
+                result.scenarioListRevision(),
+                result.scenarios(),
+                flags);
     }
 
     /**

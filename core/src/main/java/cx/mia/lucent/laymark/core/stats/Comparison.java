@@ -66,6 +66,21 @@ public record Comparison(
             List<Run> baseline,
             List<Run> candidate,
             double floorPercent) {
+        return of(candidateId, scenarioId, baseline, candidate, floorPercent, null);
+    }
+
+    /**
+     * @param profile widens the interval to at least this machine's remembered wobble for the
+     *     scenario; null skips it. Widen-only, so a stale profile can only make the verdict more
+     *     cautious — the failure a benchmark should prefer.
+     */
+    public static Comparison of(
+            String candidateId,
+            String scenarioId,
+            List<Run> baseline,
+            List<Run> candidate,
+            double floorPercent,
+            MachineProfile profile) {
 
         List<Double> differences = new ArrayList<>();
         int voided = 0;
@@ -98,6 +113,9 @@ public record Comparison(
                         / (differences.size() - 1);
         double standardError = Math.sqrt(variance / differences.size());
         double margin = StudentT.criticalValue(differences.size() - 1) * standardError;
+        if (profile != null) {
+            margin = profile.widen(scenarioId, margin);
+        }
 
         double low = mean - margin;
         double high = mean + margin;
