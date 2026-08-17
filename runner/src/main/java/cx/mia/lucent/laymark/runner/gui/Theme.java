@@ -104,6 +104,49 @@ final class Theme {
         return button;
     }
 
+    /**
+     * A vertical list panel that always fits its viewport's width.
+     *
+     * <p>A plain panel in a scroll pane grows to its widest row and earns a horizontal scroll bar,
+     * which pushes every row's trailing content out of sight. Tracking the viewport width instead
+     * makes the rows clip — and a clipped {@code JLabel} renders an ellipsis, which is the right
+     * failure mode for a long mod name.
+     */
+    static final class VerticalList extends JPanel implements javax.swing.Scrollable {
+
+        VerticalList() {
+            setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS));
+            setOpaque(false);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(
+                java.awt.Rectangle visible, int orientation, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(
+                java.awt.Rectangle visible, int orientation, int direction) {
+            return visible.height;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
     /** A borderless scroll pane, so a card's own outline is the only one drawn. */
     static JScrollPane scroll(Component view) {
         JScrollPane pane = new JScrollPane(view);

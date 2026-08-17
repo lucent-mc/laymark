@@ -79,7 +79,7 @@ public final class RunnerWindow implements ExperimentListener {
     private final JLabel progress = Theme.muted("");
     private final JLabel eta = Theme.muted("");
 
-    private final JPanel candidatesList = new JPanel();
+    private final JPanel candidatesList = new Theme.VerticalList();
     private final JPanel columns = new JPanel();
     private final JLabel currentArm = Theme.mono("—", Theme.TEXT);
     private final JLabel currentBaseline = Theme.mono("—", Theme.TEXT);
@@ -87,6 +87,7 @@ public final class RunnerWindow implements ExperimentListener {
     private final JTextArea log = new JTextArea();
 
     private final Map<String, CandidateRow> candidateRows = new LinkedHashMap<>();
+    private Map<String, String> displayNames = Map.of();
     private final Map<String, Double> liveScores = new LinkedHashMap<>();
     private JPanel liveColumn;
     private JPanel liveRows;
@@ -197,8 +198,6 @@ public final class RunnerWindow implements ExperimentListener {
         view.setBackground(Theme.BACKGROUND);
         Theme.pad(view, 12, 12, 12, 12);
 
-        candidatesList.setLayout(new BoxLayout(candidatesList, BoxLayout.Y_AXIS));
-        candidatesList.setOpaque(false);
         JPanel candidatesCard = Theme.card("Candidates");
         candidatesCard.add(Theme.scroll(candidatesList), BorderLayout.CENTER);
         candidatesCard.setPreferredSize(new Dimension(260, 0));
@@ -318,6 +317,31 @@ public final class RunnerWindow implements ExperimentListener {
         state("Starting", Theme.ACCENT);
         views.show(body, "run");
         clock.start();
+        dockBesideGame();
+    }
+
+    /**
+     * Moves this window into whatever space the game will not use.
+     *
+     * <p>The game is pinned to the top-left corner at a fixed size (the preset does that), so the
+     * space right of it — or below it, on a narrow screen — is known before it even launches.
+     * Docking there means the schedule and the current arm stay visible while the game runs,
+     * instead of the two windows taking turns hiding each other.
+     */
+    private void dockBesideGame() {
+        var screen = frame.getGraphicsConfiguration().getBounds();
+        var scale = frame.getGraphicsConfiguration().getDefaultTransform().getScaleX();
+        int gameRight = (int) Math.ceil(cx.mia.lucent.laymark.core.Laymark.WINDOW_WIDTH / scale);
+        int gameBottom =
+                (int) Math.ceil((cx.mia.lucent.laymark.core.Laymark.WINDOW_HEIGHT + 80) / scale);
+
+        int rightWidth = screen.width - gameRight;
+        if (rightWidth >= 420) {
+            frame.setBounds(screen.x + gameRight, screen.y, rightWidth, screen.height);
+        } else if (screen.height - gameBottom >= 300) {
+            frame.setBounds(screen.x, screen.y + gameBottom, screen.width, screen.height - gameBottom);
+        }
+        // A screen with room for neither keeps the window where the operator put it.
     }
 
     private void confirmStop() {
@@ -418,7 +442,7 @@ public final class RunnerWindow implements ExperimentListener {
     }
 
     private CandidateRow addCandidateRow(String id) {
-        CandidateRow row = new CandidateRow(id);
+        CandidateRow row = new CandidateRow(display(id), id);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         candidatesList.add(row);
         return row;
@@ -573,13 +597,23 @@ public final class RunnerWindow implements ExperimentListener {
             return arm.id() + "  (the baseline stack unchanged)";
         }
         StringBuilder text = new StringBuilder(arm.id()).append("  ");
-        added.forEach(mod -> text.append('+').append(shorten(mod)).append(' '));
-        removed.forEach(mod -> text.append('-').append(shorten(mod)).append(' '));
+        added.forEach(mod -> text.append('+').append(display(mod)).append(' '));
+        removed.forEach(mod -> text.append('-').append(display(mod)).append(' '));
         return text.toString().trim();
     }
 
     private static String shorten(String fileName) {
         return fileName.replaceFirst("\\.jar$", "");
+    }
+
+    /** The mod's own name where one is known; the file name is identity, not prose. */
+    private String display(String fileName) {
+        return displayNames.getOrDefault(fileName, shorten(fileName));
+    }
+
+    @Override
+    public void named(Map<String, String> names) {
+        SwingUtilities.invokeLater(() -> displayNames = Map.copyOf(names));
     }
 
     // --- run columns ---
@@ -631,7 +665,7 @@ public final class RunnerWindow implements ExperimentListener {
                                 liveRows.add(
                                         resultRow(
                                                 ++rank[0],
-                                                shorten(entry.getKey()),
+                                                display(entry.getKey()),
                                                 String.format(Locale.ROOT, "%.1f ms", entry.getValue()),
                                                 false)));
     }
@@ -647,9 +681,15 @@ public final class RunnerWindow implements ExperimentListener {
                 .forEach(
                         comparison ->
                                 liveRows.add(
+                                        // One row per (candidate, scenario). Without the scenario
+                                        // in the label the same candidate appears "twice" and the
+                                        // reader has no way to know both rows are telling the
+                                        // truth about different work.
                                         resultRow(
                                                 ++rank[0],
-                                                shorten(comparison.candidateId()),
+                                                display(comparison.candidateId())
+                                                        + "  ·  "
+                                                        + comparison.scenarioId(),
                                                 String.format(
                                                         Locale.ROOT,
                                                         "%+.1f%%  %s",
@@ -702,7 +742,7 @@ public final class RunnerWindow implements ExperimentListener {
         private final JLabel state = Theme.muted("Queued");
         private final Theme.Dot dot = new Theme.Dot(Theme.MUTED, false);
 
-        CandidateRow(String id) {
+        CandidateRow(String displayName, String fileName) {
             setLayout(new BorderLayout(8, 0));
             setOpaque(false);
             setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 6, 4));
@@ -711,8 +751,11 @@ public final class RunnerWindow implements ExperimentListener {
             JPanel text = new JPanel();
             text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
             text.setOpaque(false);
-            JLabel name = new JLabel(shorten(id));
+            // BorderLayout.CENTER clips the label to whatever the dot leaves over, and a clipped
+            // JLabel renders an ellipsis -- so the dot is always visible, however long the name.
+            JLabel name = new JLabel(displayName);
             name.setForeground(Theme.TEXT);
+            name.setToolTipText(fileName);
             name.setAlignmentX(Component.LEFT_ALIGNMENT);
             state.setAlignmentX(Component.LEFT_ALIGNMENT);
             text.add(name);

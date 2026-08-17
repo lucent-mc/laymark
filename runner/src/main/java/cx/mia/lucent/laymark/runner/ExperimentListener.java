@@ -30,6 +30,15 @@ public interface ExperimentListener {
     /** The round's run order, before anything launches. */
     default void scheduleBuilt(Slate slate) {}
 
+    /**
+     * What each mod file is called, for anything showing arms to a human.
+     *
+     * <p>Arm ids stay file names — they are what moves on disk — and a display surface substitutes
+     * these on the way out. Optional and best-effort: a file with no manifest name simply is not
+     * here.
+     */
+    default void named(java.util.Map<String, String> displayNames) {}
+
     default void runStarted(int sequence, Arm arm) {}
 
     /** The arm currently in flight has begun this scenario. */

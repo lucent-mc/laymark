@@ -70,7 +70,8 @@ public final class PlanningView extends JPanel {
             ModrinthInstance instance,
             Set<String> baseline,
             Map<String, Set<String>> candidates,
-            Schedule schedule) {
+            Schedule schedule,
+            Map<String, String> displayNames) {
 
         /**
          * Every mod Laymark takes charge of. Anything installed and not named here is withheld for
@@ -113,7 +114,7 @@ public final class PlanningView extends JPanel {
                             99,
                             1));
 
-    private final JPanel modList = new JPanel();
+    private final JPanel modList = new Theme.VerticalList();
     private final JLabel modCount = Theme.muted("");
     private final Map<String, RoleControl> roles = new LinkedHashMap<>();
     private final JTextField search = new JTextField(18);
@@ -122,6 +123,7 @@ public final class PlanningView extends JPanel {
     private DependencyGraph graph;
     private Map<String, String> modIdByFile = Map.of();
     private Map<String, String> fileByModId = Map.of();
+    private Map<String, String> displayNameByFile = Map.of();
     private final Path root;
     private final String hereProfile;
 
@@ -301,8 +303,6 @@ public final class PlanningView extends JPanel {
 
     private JPanel candidatesCard() {
         JPanel card = Theme.card("Mods");
-        modList.setLayout(new BoxLayout(modList, BoxLayout.Y_AXIS));
-        modList.setOpaque(false);
 
         search.putClientProperty("JTextField.placeholderText", "search");
         search.getDocument()
@@ -533,7 +533,7 @@ public final class PlanningView extends JPanel {
             Path gameDirectory = root.resolve("profiles").resolve(profile);
             probeDependencies(gameDirectory);
             for (String name : installed(gameDirectory)) {
-                roles.put(name, new RoleControl(name, this::roleChanged));
+                roles.put(name, new RoleControl(display(name), name, this::roleChanged));
             }
         }
         refilter();
@@ -597,7 +597,7 @@ public final class PlanningView extends JPanel {
                     }
                     control.note(
                             carriedDependencies(file).stream()
-                                    .map(dep -> shorten(dep) + " — included as a dependency of this bundle")
+                                    .map(dep -> display(dep) + " — included as a dependency of this bundle")
                                     .toList());
                 });
         modList.revalidate();
@@ -609,6 +609,7 @@ public final class PlanningView extends JPanel {
         graph = null;
         modIdByFile = Map.of();
         fileByModId = Map.of();
+        displayNameByFile = Map.of();
         Path mods = gameDirectory.resolve("mods");
         if (!Files.isDirectory(mods)) {
             return;
@@ -621,6 +622,7 @@ public final class PlanningView extends JPanel {
                                     .toList());
             graph = probed.graph();
             modIdByFile = probed.modIdByFile();
+            displayNameByFile = probed.displayNameByFile();
             Map<String, String> reversed = new LinkedHashMap<>();
             modIdByFile.forEach((file, modId) -> reversed.putIfAbsent(modId, file));
             fileByModId = reversed;
@@ -633,6 +635,16 @@ public final class PlanningView extends JPanel {
 
     private static String shorten(String fileName) {
         return fileName.replaceFirst("\\.jar$", "");
+    }
+
+    /**
+     * What a mod is called, for humans: the manifest's display name, the file name failing that.
+     *
+     * <p>"Sodium", not {@code sodium-neoforge-0.9.2-alpha.4+mc26.1.2}. The file name stays the
+     * identity everywhere the code moves files; it is only the reading that changes.
+     */
+    private String display(String fileName) {
+        return displayNameByFile.getOrDefault(fileName, shorten(fileName));
     }
 
     /** What one mod is doing in this experiment. */
@@ -648,14 +660,17 @@ public final class PlanningView extends JPanel {
         private final Map<Role, JToggleButton> buttons = new LinkedHashMap<>();
         private final JPanel notes = new JPanel();
 
-        RoleControl(String fileName, Runnable onChange) {
+        RoleControl(String displayName, String fileName, Runnable onChange) {
             setLayout(new BorderLayout(8, 0));
             setOpaque(false);
             setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 0, 2, 6));
             setAlignmentX(Component.LEFT_ALIGNMENT);
 
-            JLabel name = new JLabel(fileName.replaceFirst("\\.jar$", ""));
+            JLabel name = new JLabel(displayName);
             name.setForeground(Theme.TEXT);
+            // The file name stays reachable: it is what actually moves on disk, and two mods can
+            // share a display name.
+            name.setToolTipText(fileName);
 
             notes.setLayout(new BoxLayout(notes, BoxLayout.Y_AXIS));
             notes.setOpaque(false);
@@ -892,7 +907,11 @@ public final class PlanningView extends JPanel {
         }
 
         return new Choice(
-                new ModrinthInstance(root, profile, version), baseline, bundles, parsed);
+                new ModrinthInstance(root, profile, version),
+                baseline,
+                bundles,
+                parsed,
+                Map.copyOf(displayNameByFile));
     }
 
     private Schedule schedule() {

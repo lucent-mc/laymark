@@ -160,6 +160,7 @@ public final class Main {
             RunControl control,
             ExperimentListener listener) {
         try {
+            listener.named(choice.displayNames());
             String runId = LocalDateTime.now().format(RUN_ID);
             Path outputDirectory =
                     choice.instance()

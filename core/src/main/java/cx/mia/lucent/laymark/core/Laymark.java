@@ -65,6 +65,18 @@ public final class Laymark {
      */
     public static final String SCENE_DIR = WORK_DIR + "/scenes";
 
+    /**
+     * The measured window, one size everywhere it is mentioned.
+     *
+     * <p>Passed as {@code --width}/{@code --height} so the game opens at this size, and enforced
+     * again by the preset so a mod resizing mid-session is caught. Opening at the wrong size and
+     * snapping to the right one wastes a visible resize and leaves the first seconds of the
+     * session under a size nobody asked for.
+     */
+    public static final int WINDOW_WIDTH = 1600;
+
+    public static final int WINDOW_HEIGHT = 900;
+
     /** The run id the harness resolves the config under, passed on the launch command line. */
     public static final String PROPERTY_RUN_ID = "laymark.run";
 

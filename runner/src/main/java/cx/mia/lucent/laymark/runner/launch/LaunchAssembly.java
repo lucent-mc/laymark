@@ -84,6 +84,14 @@ public final class LaunchAssembly {
                 argv.add(substitute(argument.value(), substitutions));
             }
         }
+
+        // The game opens at the measured size instead of opening at a default and being resized
+        // once the harness gets around to it. The preset still enforces the size afterwards; this
+        // only spares the visible snap and the seconds spent under a size nobody asked for.
+        argv.add("--width");
+        argv.add(String.valueOf(Laymark.WINDOW_WIDTH));
+        argv.add("--height");
+        argv.add(String.valueOf(Laymark.WINDOW_HEIGHT));
         return List.copyOf(argv);
     }
 
