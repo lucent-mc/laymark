@@ -48,6 +48,9 @@ public final class BenchmarkRun {
     /** How long to wait after the run reports finished before killing the process anyway. */
     private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(30);
 
+    /** Six missed heartbeats. A harness this quiet is not slow, it is gone. */
+    private static final Duration IDLE_TIMEOUT = Duration.ofMinutes(3);
+
     public static RunResult execute(
             ModrinthInstance instance,
             RunPlan plan,
@@ -66,6 +69,7 @@ public final class BenchmarkRun {
         Path stderr = outputDirectory.resolve("game-stderr.log");
 
         requireConfig(instance);
+        sweepLeakedSaves(instance);
         stageScenes(instance, plan, sceneRoot);
 
         // Bind before launching. The port then exists before anything could connect to it, so
@@ -138,6 +142,8 @@ public final class BenchmarkRun {
 
         AtomicReference<Frame> terminal = new AtomicReference<>();
         CountDownLatch finished = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicLong lastFrameAt =
+                new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
 
         Thread pump =
                 Thread.ofVirtual()
@@ -147,7 +153,10 @@ public final class BenchmarkRun {
                                         server.pump(
                                                 session,
                                                 frame -> {
-                                                    describe(frame);
+                                                    lastFrameAt.set(System.nanoTime());
+                                                    if (!(frame instanceof Frame.Heartbeat)) {
+                                                        describe(frame);
+                                                    }
                                                     if (frame instanceof Frame.ScenarioStarted started) {
                                                         listener.scenarioStarted(
                                                                 started.scenarioId(), started.repetition());
@@ -165,12 +174,34 @@ public final class BenchmarkRun {
                                     }
                                 });
 
-        boolean reported = finished.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        // Two clocks, different purposes: the run timeout bounds honest work, and the idle
+        // timeout catches a hung harness in minutes instead of burning the whole run budget --
+        // the harness heartbeats every 30 seconds even when a capture emits nothing.
+        long deadline = System.nanoTime() + timeout.toNanos();
+        boolean reported = false;
+        boolean silent = false;
+        while (System.nanoTime() < deadline) {
+            if (finished.await(1, TimeUnit.SECONDS)) {
+                reported = true;
+                break;
+            }
+            if (System.nanoTime() - lastFrameAt.get() > IDLE_TIMEOUT.toNanos()) {
+                silent = true;
+                break;
+            }
+        }
         game.waitFor(SHUTDOWN_GRACE);
         game.terminate(Duration.ofSeconds(15));
         pump.join(Duration.ofSeconds(5));
 
         Frame outcome = terminal.get();
+        if (silent && outcome == null) {
+            throw new LaunchException(
+                    "the harness went silent -- no frame, not even a heartbeat, for "
+                            + IDLE_TIMEOUT.toMinutes()
+                            + " minutes. It hung or died without closing; events so far: "
+                            + outputDirectory.resolve("events.jsonl"));
+        }
         if (!reported || outcome == null) {
             throw new LaunchException(
                     "the run produced no terminal frame within "
@@ -201,6 +232,40 @@ public final class BenchmarkRun {
                             + " running something it found on disk -- update mods/laymark-*.jar");
         }
         return result;
+    }
+
+    /**
+     * Deletes disposable saves a previous run left behind.
+     *
+     * <p>A run killed mid-schedule leaves the world its dependents still held a lease on, and a
+     * leftover save blocks the next run's {@code createWorld} under the same name. Only names
+     * {@link cx.mia.lucent.laymark.core.harness.WorldSpec#isDisposable} recognises are touched —
+     * the sweep must never be able to reach a save a human made.
+     */
+    private static void sweepLeakedSaves(ModrinthInstance instance) {
+        Path saves = instance.gameDirectory().resolve("saves");
+        if (!Files.isDirectory(saves)) {
+            return;
+        }
+        try (var entries = Files.list(saves)) {
+            for (Path save : entries.toList()) {
+                if (!Files.isDirectory(save)
+                        || !cx.mia.lucent.laymark.core.harness.WorldSpec.isDisposable(
+                                save.getFileName().toString())) {
+                    continue;
+                }
+                System.out.println("sweeping leaked save " + save.getFileName());
+                try (var walk = Files.walk(save)) {
+                    for (Path path : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                        Files.deleteIfExists(path);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            // A save that will not delete usually means the next createWorld fails loudly with a
+            // better message; the sweep is best-effort housekeeping.
+            System.err.println("could not sweep leaked saves: " + e);
+        }
     }
 
     /**

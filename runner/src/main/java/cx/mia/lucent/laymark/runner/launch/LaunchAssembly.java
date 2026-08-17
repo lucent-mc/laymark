@@ -34,6 +34,13 @@ public final class LaunchAssembly {
     private LaunchAssembly() {}
 
     /**
+     * Fixed min = max, so the heap neither grows mid-capture nor differs between arms. 4 GiB is
+     * the modded-pack convention; a pack that genuinely needs more will OOM loudly rather than
+     * quietly measure a different heap than its baseline did.
+     */
+    private static final String HEAP = "4G";
+
+    /**
      * @param port loopback port the runner is already listening on
      * @param token single-use nonce the mod must echo in its first frame
      * @param runId what the harness resolves the config under; with the output directory, the only
@@ -76,6 +83,15 @@ public final class LaunchAssembly {
                 argv.add(substitute(argument.value(), substitutions));
             }
         }
+
+        // After the descriptor's arguments, so these win -- the JVM honours the last occurrence.
+        // Heap and collector are pinned because they are exactly what two arms must share: a heap
+        // that floats with whatever the launcher last used, or a collector that differs between
+        // machines, is a variable nobody recorded wearing a mod's name. This pinning is the reason
+        // Laymark launches the game itself at all (§5.1).
+        argv.add("-Xms" + HEAP);
+        argv.add("-Xmx" + HEAP);
+        argv.add("-XX:+UseG1GC");
 
         argv.add(descriptor.mainClass());
 
