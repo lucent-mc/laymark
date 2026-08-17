@@ -90,6 +90,14 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
   what a *standalone* streaming scenario would need.
 - §7 The default scenario set, which the spec requires Laymark to ship: chunk generation, and
   entity culling with occluders inside the pen.
+- Possible, once Chunky is in: **server-side generation with no client attached.** `doWorldLoad`
+  splits cleanly at `startMemoryChannel()` — spinning the integrated server is separable from
+  joining it — and Chunky supplies its own tickets and pumps the chunk system through the main
+  thread executor, which the run loop drains even while `IntegratedServer.paused` is true. It also
+  resets `emptyTicks`, defusing vanilla's idle pause. Costs one mixin.
+  Would be a **phase of its own, not a variant**: with no client there are no frame, render-call,
+  submit or GPU channels, so the signal is MSPT, work counters and wall-clock — and generation with
+  nothing streaming or meshing it is not comparable to generation measured from inside the world.
 - §7 Verify placement against a real `.schem`.
 
 ### 14 — Result layout and provenance
