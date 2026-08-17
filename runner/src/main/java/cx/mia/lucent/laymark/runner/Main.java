@@ -183,14 +183,17 @@ public final class Main {
                             "acclimation",
                             cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
                             floor);
+            // An arm enables the whole bundle: the candidate and the dependencies it carries. The
+            // bundle moves as one, because a candidate without a dependency it needs is not a
+            // smaller arm, it is an arm that does not start.
             List<cx.mia.lucent.laymark.core.experiment.Arm> candidates =
-                    choice.candidates().stream()
+                    choice.candidates().entrySet().stream()
                             .map(
-                                    candidate -> {
+                                    entry -> {
                                         var enabled = new java.util.TreeSet<>(floor);
-                                        enabled.add(candidate);
+                                        enabled.addAll(entry.getValue());
                                         return new cx.mia.lucent.laymark.core.experiment.Arm(
-                                                candidate,
+                                                entry.getKey(),
                                                 cx.mia.lucent.laymark.core.experiment.Arm.Kind
                                                         .CANDIDATE,
                                                 enabled);

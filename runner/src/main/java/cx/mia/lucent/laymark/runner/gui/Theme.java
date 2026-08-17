@@ -79,6 +79,14 @@ final class Theme {
         return label;
     }
 
+    /** The quietest tier: legends, footnotes, per-row annotations. */
+    static JLabel small(String text) {
+        JLabel label = new JLabel(text);
+        label.setForeground(MUTED);
+        label.setFont(label.getFont().deriveFont(11f));
+        return label;
+    }
+
     static JLabel mono(String text, Color colour) {
         JLabel label = new JLabel(text);
         label.setFont(MONO);

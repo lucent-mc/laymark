@@ -57,10 +57,19 @@ public final class PlanningView extends JPanel {
      * <p>What to measure is not here: that is the scenario config's job, and it is the operator's
      * to write. Pose, preset, phases and stop condition all live in that file.
      */
+    /**
+     * @param baseline what loads in every arm: the explicit baseline mods, the instrumentation,
+     *     and whatever those require
+     * @param candidates each candidate's <strong>bundle</strong> — the candidate itself plus the
+     *     dependencies it carries that the baseline does not already load. The whole bundle
+     *     enables and disables as one, so the comparison is "with this mod, runnable" against
+     *     "without it"; a candidate stripped of a dependency it needs is not a smaller arm, it is
+     *     an arm that does not start.
+     */
     public record Choice(
             ModrinthInstance instance,
             Set<String> baseline,
-            Set<String> candidates,
+            Map<String, Set<String>> candidates,
             Schedule schedule) {
 
         /**
@@ -69,7 +78,7 @@ public final class PlanningView extends JPanel {
          */
         public Set<String> participants() {
             Set<String> all = new TreeSet<>(baseline);
-            all.addAll(candidates);
+            candidates.values().forEach(all::addAll);
             return all;
         }
     }
@@ -164,36 +173,94 @@ public final class PlanningView extends JPanel {
         reloadMods();
     }
 
+    /**
+     * A form grid rather than flowed rows: one right-aligned label column, every value starting on
+     * the same axis. Alignment is what makes three unrelated rows read as one instrument panel,
+     * and the legend sits a tier below the values it explains instead of beside them at full
+     * volume.
+     */
     private JPanel instanceCard() {
         JPanel card = Theme.card("Instance");
-        JPanel fields = new JPanel(new GridLayout(3, 1, 0, 8));
-        fields.setOpaque(false);
+        JPanel grid = new JPanel(new java.awt.GridBagLayout());
+        grid.setOpaque(false);
 
-        JPanel top = row();
-        top.add(Theme.muted("profile"));
-        top.add(profiles);
-        top.add(Theme.muted("version"));
-        top.add(versions);
+        JButton edit = Theme.button("Edit", false);
+        edit.addActionListener(unused -> editConfig());
 
-        JPanel middle = row();
-        middle.add(Theme.muted("scenarios"));
-        middle.add(configStatus);
+        JPanel instanceRow = row();
+        instanceRow.add(profiles);
+        instanceRow.add(Theme.muted("on"));
+        instanceRow.add(versions);
 
-        JPanel bottom = row();
-        bottom.add(Theme.muted("schedule"));
-        bottom.add(schedule);
-        bottom.add(Theme.muted("baseline every"));
-        bottom.add(baselineInterval);
-        bottom.add(Theme.muted("arms"));
-        // The legend is the documentation. A schedule field with no key beside it is a field people
-        // leave alone.
-        bottom.add(Theme.muted("— A acclimation, B baseline, C a pass over the candidates, CC twice each"));
+        JPanel scenariosRow = row();
+        scenariosRow.add(configStatus);
+        scenariosRow.add(edit);
 
-        fields.add(top);
-        fields.add(middle);
-        fields.add(bottom);
-        card.add(fields, BorderLayout.CENTER);
+        JPanel scheduleRow = row();
+        scheduleRow.add(schedule);
+        scheduleRow.add(Theme.muted("baseline every"));
+        scheduleRow.add(baselineInterval);
+        scheduleRow.add(Theme.muted("arms"));
+
+        formRow(grid, 0, "instance", instanceRow);
+        formRow(grid, 1, "scenarios", scenariosRow);
+        formRow(grid, 2, "schedule", scheduleRow);
+        // The legend is the documentation -- a schedule field with no key is a field people leave
+        // alone -- but it is a footnote to the field, not a peer of it.
+        formRow(
+                grid,
+                3,
+                null,
+                Theme.small("A acclimation · B baseline · C a pass over the candidates · CC twice each"));
+
+        card.add(grid, BorderLayout.CENTER);
         return card;
+    }
+
+    /** One grid row: a right-aligned muted label in a shared column, then the value. */
+    private static void formRow(JPanel grid, int y, String label, Component value) {
+        var constraints = new java.awt.GridBagConstraints();
+        constraints.gridy = y;
+        constraints.insets = new java.awt.Insets(y == 0 ? 0 : 6, 0, 0, 10);
+        constraints.gridx = 0;
+        constraints.anchor = java.awt.GridBagConstraints.EAST;
+        JLabel key = Theme.muted(label == null ? "" : label);
+        key.setPreferredSize(new Dimension(70, 20));
+        key.setHorizontalAlignment(JLabel.RIGHT);
+        grid.add(key, constraints);
+
+        constraints.gridx = 1;
+        constraints.weightx = 1;
+        constraints.anchor = java.awt.GridBagConstraints.WEST;
+        constraints.insets = new java.awt.Insets(y == 0 ? 0 : 6, 0, 0, 0);
+        grid.add(value, constraints);
+    }
+
+    /** Opens the config in whatever edits JSON here; the file is the interface, not this window. */
+    private void editConfig() {
+        Path path = configPath();
+        try {
+            if (!Files.isRegularFile(path)) {
+                Files.createDirectories(path.getParent());
+                Files.writeString(
+                        path,
+                        """
+                        {
+                          "version": 1,
+                          "settingsPresets": {},
+                          "scenarios": []
+                        }
+                        """,
+                        StandardCharsets.UTF_8);
+            }
+            java.awt.Desktop.getDesktop().open(path.toFile());
+        } catch (java.io.IOException | RuntimeException e) {
+            javax.swing.JOptionPane.showMessageDialog(
+                    this,
+                    "Could not open " + path + ": " + e.getMessage(),
+                    "Edit config",
+                    javax.swing.JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     /**
@@ -405,7 +472,7 @@ public final class PlanningView extends JPanel {
                         control.set(role.apply(name));
                     }
                 });
-        settleDependencies();
+        updateDependencyNotes();
         updateCount();
     }
 
@@ -477,67 +544,64 @@ public final class PlanningView extends JPanel {
     }
 
     private void roleChanged() {
-        settleDependencies();
+        updateDependencyNotes();
         updateCount();
     }
 
     /**
-     * Makes the roster loadable: everything a loaded mod requires is loaded, and nothing depends on
-     * a mod that is off.
+     * The files a mod's bundle carries besides itself: its transitive requirements, minus anything
+     * already loaded in every arm.
      *
-     * <p>Run after every change rather than only on the row that changed, because the two rules
-     * chase each other — withholding a library withholds its dependents, and one of those may have
-     * been the reason another library was on.
-     *
-     * <p>A required mod is brought back as <strong>baseline</strong>, never as a candidate. It then
-     * loads in every arm, so the comparison still isolates the candidate rather than measuring the
-     * candidate and its dependency together.
+     * <p>A dependency is never promoted to a role of its own. It rides inside the bundle of
+     * whatever needs it — a candidate's arm enables the candidate <em>and</em> its requirements,
+     * the baseline includes what baseline mods require — while the dependency's own roster state
+     * stays exactly what the operator set. Silently changing a row's state was the alternative,
+     * and a control that changes itself is a control nobody trusts.
      */
-    private void settleDependencies() {
+    private Set<String> carriedDependencies(String fileName) {
         if (graph == null) {
-            return;
+            return Set.of();
         }
-        for (int pass = 0; pass < roles.size() + 1; pass++) {
-            boolean changed = false;
-
-            for (Map.Entry<String, RoleControl> entry : roles.entrySet()) {
-                if (entry.getValue().role() == Role.OFF) {
-                    continue;
-                }
-                String modId = modIdByFile.get(entry.getKey());
-                if (modId == null) {
-                    continue;
-                }
-                for (String required : graph.closureOf(modId)) {
-                    RoleControl control = roles.get(fileByModId.get(required));
-                    if (control != null && control.role() == Role.OFF) {
-                        control.set(Role.BASELINE);
-                        changed = true;
-                    }
-                }
+        String modId = modIdByFile.get(fileName);
+        if (modId == null) {
+            return Set.of();
+        }
+        Set<String> carried = new TreeSet<>();
+        for (String required : graph.closureOf(modId)) {
+            String file = fileByModId.get(required);
+            if (file == null) {
+                continue; // not installed under any name we can move; the game will say so
             }
-
-            for (Map.Entry<String, RoleControl> entry : roles.entrySet()) {
-                if (entry.getValue().role() != Role.OFF) {
-                    continue;
-                }
-                String modId = modIdByFile.get(entry.getKey());
-                if (modId == null) {
-                    continue;
-                }
-                for (String dependent : graph.dependentsOf(modId)) {
-                    RoleControl control = roles.get(fileByModId.get(dependent));
-                    if (control != null && control.role() != Role.OFF) {
-                        control.set(Role.OFF);
-                        changed = true;
-                    }
-                }
-            }
-
-            if (!changed) {
-                return;
+            RoleControl control = roles.get(file);
+            boolean alreadyEverywhere =
+                    (control != null && control.role() == Role.BASELINE) || isInstrumentation(file);
+            if (!alreadyEverywhere) {
+                carried.add(file);
             }
         }
+        return carried;
+    }
+
+    /**
+     * Annotates every baseline or candidate row with what its bundle silently carries.
+     *
+     * <p>The note lives under the mod that <em>causes</em> the inclusion, because that is where
+     * the decision was made; the dependency's own row shows nothing unusual.
+     */
+    private void updateDependencyNotes() {
+        roles.forEach(
+                (file, control) -> {
+                    if (control.role() == Role.OFF) {
+                        control.note(List.of());
+                        return;
+                    }
+                    control.note(
+                            carriedDependencies(file).stream()
+                                    .map(dep -> shorten(dep) + " — included as a dependency of this bundle")
+                                    .toList());
+                });
+        modList.revalidate();
+        modList.repaint();
     }
 
     /** Reads every installed jar once, so a role change can consult the graph without touching disk. */
@@ -567,6 +631,10 @@ public final class PlanningView extends JPanel {
         }
     }
 
+    private static String shorten(String fileName) {
+        return fileName.replaceFirst("\\.jar$", "");
+    }
+
     /** What one mod is doing in this experiment. */
     private enum Role {
         OFF,
@@ -574,20 +642,32 @@ public final class PlanningView extends JPanel {
         CANDIDATE
     }
 
-    /** One mod's row: its name, and the three things it can be. */
+    /** One mod's row: its name, the three things it can be, and what its bundle carries. */
     private static final class RoleControl extends JPanel {
 
         private final Map<Role, JToggleButton> buttons = new LinkedHashMap<>();
+        private final JPanel notes = new JPanel();
 
         RoleControl(String fileName, Runnable onChange) {
             setLayout(new BorderLayout(8, 0));
             setOpaque(false);
             setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 0, 2, 6));
-            setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
             setAlignmentX(Component.LEFT_ALIGNMENT);
 
             JLabel name = new JLabel(fileName.replaceFirst("\\.jar$", ""));
             name.setForeground(Theme.TEXT);
+
+            notes.setLayout(new BoxLayout(notes, BoxLayout.Y_AXIS));
+            notes.setOpaque(false);
+            notes.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 14, 0, 0));
+
+            JPanel text = new JPanel();
+            text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
+            text.setOpaque(false);
+            name.setAlignmentX(Component.LEFT_ALIGNMENT);
+            notes.setAlignmentX(Component.LEFT_ALIGNMENT);
+            text.add(name);
+            text.add(notes);
 
             ButtonGroup group = new ButtonGroup();
             JPanel choices = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
@@ -604,8 +684,26 @@ public final class PlanningView extends JPanel {
             // which is the only assignment that measures nothing until someone asks a question.
             buttons.get(Role.BASELINE).setSelected(true);
 
-            add(name, BorderLayout.WEST);
+            add(text, BorderLayout.CENTER);
             add(choices, BorderLayout.EAST);
+        }
+
+        /** What this row's bundle carries, one line per dependency; empty clears it. */
+        void note(List<String> lines) {
+            notes.removeAll();
+            for (String line : lines) {
+                JLabel label = Theme.small(line);
+                label.setAlignmentX(Component.LEFT_ALIGNMENT);
+                notes.add(label);
+            }
+            revalidate();
+        }
+
+        @Override
+        public Dimension getMaximumSize() {
+            // Full width, own height: a BoxLayout would otherwise stretch rows to share leftover
+            // vertical space, and a roster whose rows drift apart reads as broken.
+            return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
         }
 
         private static String label(Role role) {
@@ -774,13 +872,27 @@ public final class PlanningView extends JPanel {
         }
         PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
         PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue());
+        // The baseline carries what baseline mods require, exactly as a candidate's bundle does.
         Set<String> baseline = named(Role.BASELINE);
         baseline.addAll(instrumentation());
+        for (String name : named(Role.BASELINE)) {
+            baseline.addAll(carriedDependencies(name));
+        }
+
+        Map<String, Set<String>> bundles = new LinkedHashMap<>();
+        for (String candidate : named(Role.CANDIDATE)) {
+            Set<String> bundle = new TreeSet<>();
+            bundle.add(candidate);
+            for (String dep : carriedDependencies(candidate)) {
+                if (!baseline.contains(dep)) {
+                    bundle.add(dep);
+                }
+            }
+            bundles.put(candidate, bundle);
+        }
+
         return new Choice(
-                new ModrinthInstance(root, profile, version),
-                baseline,
-                named(Role.CANDIDATE),
-                parsed);
+                new ModrinthInstance(root, profile, version), baseline, bundles, parsed);
     }
 
     private Schedule schedule() {
