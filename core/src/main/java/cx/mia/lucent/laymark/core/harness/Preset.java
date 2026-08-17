@@ -76,6 +76,26 @@ public record Preset(
         }
     }
 
+    /** Field-by-field differences from another preset, one line each; empty when identical. */
+    public java.util.List<String> describeDifferences(Preset other) {
+        java.util.List<String> differences = new java.util.ArrayList<>();
+        difference(differences, "renderDistance", renderDistance, other.renderDistance);
+        difference(differences, "simulationDistance", simulationDistance, other.simulationDistance);
+        difference(differences, "particles", particles, other.particles);
+        difference(differences, "clouds", clouds, other.clouds);
+        difference(differences, "entityShadows", entityShadows, other.entityShadows);
+        difference(differences, "biomeBlendRadius", biomeBlendRadius, other.biomeBlendRadius);
+        difference(differences, "fieldOfView", fieldOfView, other.fieldOfView);
+        return java.util.List.copyOf(differences);
+    }
+
+    private static void difference(
+            java.util.List<String> into, String field, Object mine, Object theirs) {
+        if (!mine.equals(theirs)) {
+            into.add(field + ": " + mine + " vs " + theirs);
+        }
+    }
+
     /** A neutral vanilla-shaped starting point, uncapped and with vsync off. */
     public static Preset defaults() {
         return new Preset(

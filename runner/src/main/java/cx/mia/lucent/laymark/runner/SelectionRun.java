@@ -104,6 +104,10 @@ public final class SelectionRun {
         int totalRounds = pool.size();
 
         List<String> remaining = new ArrayList<>(pool);
+        // Stimulus parity is checked across the WHOLE experiment, not per round: a round-3
+        // candidate is compared, through the promoted stack, against numbers from round 1.
+        Map<String, Map.Entry<String, cx.mia.lucent.laymark.core.harness.PresetReadback>>
+                stimulusReference = new LinkedHashMap<>();
         List<Comparison> allComparisons = new ArrayList<>();
         List<Comparison.Run> allBaselineRuns = new ArrayList<>();
         List<SelectionReport.Round> roundHistory = new ArrayList<>();
@@ -195,6 +199,7 @@ public final class SelectionRun {
                         if (!scenario.measured()) {
                             continue;
                         }
+                        requireParity(stimulusReference, arm.id(), scenario);
                         double scored = ExperimentRun.scored(scenario, plan);
                         total += scored;
                         counted++;
@@ -309,6 +314,40 @@ public final class SelectionRun {
                 MarkdownReport.render(report),
                 StandardCharsets.UTF_8);
         return report;
+    }
+
+    /**
+     * The cross-arm gate: this scenario's stimulus must match the first arm that ran it.
+     *
+     * <p>Hard, and checked at collection time so the failure names the arm while the arm is still
+     * the story. Per-arm verification catches drift from the request; only this catches two arms
+     * that drifted differently — the spec's §9 parity gate.
+     */
+    static void requireParity(
+            Map<String, Map.Entry<String, cx.mia.lucent.laymark.core.harness.PresetReadback>>
+                    reference,
+            String armId,
+            ScenarioResult scenario) {
+        if (scenario.readback() == null) {
+            return;
+        }
+        var existing = reference.get(scenario.scenarioId());
+        if (existing == null) {
+            reference.put(scenario.scenarioId(), Map.entry(armId, scenario.readback()));
+            return;
+        }
+        List<String> mismatches =
+                cx.mia.lucent.laymark.core.experiment.Parity.compare(
+                        scenario.scenarioId(),
+                        existing.getKey(),
+                        existing.getValue(),
+                        armId,
+                        scenario.readback());
+        if (!mismatches.isEmpty()) {
+            throw new LaunchException(
+                    "stimulus parity failed -- the arms were not shown the same work: "
+                            + String.join("; ", mismatches));
+        }
     }
 
     /** What the whole selection costs in launches, so progress and the ETA span every round. */
