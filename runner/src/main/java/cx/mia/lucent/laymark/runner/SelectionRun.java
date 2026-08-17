@@ -66,6 +66,7 @@ public final class SelectionRun {
             Set<String> floor,
             List<String> pool,
             Map<String, Set<String>> requires,
+            List<cx.mia.lucent.laymark.core.select.Branching.Conflict> conflicts,
             Schedule schedule,
             Path outputDirectory,
             Path sceneRoot,
@@ -77,6 +78,22 @@ public final class SelectionRun {
         DependencyGraph graph =
                 DependencyGraph.from(requires, DependencyGraph.Provenance.JAR_METADATA);
         Selection selection = new Selection(graph, floor);
+
+        // Conflicts split a selection into branches, and branch exploration is not built yet.
+        // Said before anything launches, because the single greedy path this run follows drops a
+        // conflicted candidate the moment its rival is promoted -- an operator has to know the
+        // other stack exists and was not measured.
+        var clusters =
+                cx.mia.lucent.laymark.core.select.Branching.clusters(
+                        conflicts.stream()
+                                .filter(c -> pool.contains(c.a()) && pool.contains(c.b()))
+                                .toList());
+        if (!clusters.isEmpty()) {
+            System.out.printf(
+                    "conflicts among candidates: %s -- this run follows the single greedy path;"
+                            + " a promoted candidate's rivals are dropped, not measured%n",
+                    clusters);
+        }
 
         Set<String> blocked = selection.unmeasurable(pool);
         if (!blocked.isEmpty()) {
@@ -301,6 +318,26 @@ public final class SelectionRun {
                 stack.add(promoted);
                 remaining.remove(promoted);
                 baselineLabel = baselineLabel + " + " + promoted;
+
+                // A rival of anything now guaranteed cannot be loaded alongside it, so its arm
+                // cannot exist. Dropped loudly: the branch where the rival won was not measured.
+                Set<String> guaranteedNow = selection.guaranteed();
+                for (var conflict : conflicts) {
+                    String rival =
+                            guaranteedNow.contains(conflict.a()) && remaining.contains(conflict.b())
+                                    ? conflict.b()
+                                    : guaranteedNow.contains(conflict.b())
+                                                    && remaining.contains(conflict.a())
+                                            ? conflict.a()
+                                            : null;
+                    if (rival != null) {
+                        remaining.remove(rival);
+                        System.out.printf(
+                                "dropped %s: incompatible with the promoted stack; the branch"
+                                        + " where it won was not measured%n",
+                                rival);
+                    }
+                }
             }
         } finally {
             SparkConfig.restore(instance.gameDirectory(), sparkProfiler);

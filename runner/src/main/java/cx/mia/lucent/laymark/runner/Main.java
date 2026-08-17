@@ -181,6 +181,7 @@ public final class Main {
                     choice.baseline(),
                     List.copyOf(choice.candidates()),
                     choice.requires(),
+                    choice.conflicts(),
                     choice.schedule(),
                     outputDirectory,
                     sceneRoot(choice.instance()),
@@ -222,16 +223,23 @@ public final class Main {
                             .filter(path -> path.getFileName().toString().endsWith(".jar"))
                             .toList();
         }
-        var probed = cx.mia.lucent.laymark.runner.select.JarProbe.inspect(jars);
+        var cache = cx.mia.lucent.laymark.runner.select.ProbeCache.open();
+        var probed = cx.mia.lucent.laymark.runner.select.JarProbe.inspect(jars, cache);
+        cache.persist();
+        var overrides =
+                cx.mia.lucent.laymark.runner.select.DependencyOverrides.load(
+                        instance.gameDirectory());
+        var graph =
+                cx.mia.lucent.laymark.core.select.DependencyGraph.merge(
+                        probed.graph(), overrides.graph());
 
-        Map<String, String> fileByModId = new java.util.LinkedHashMap<>();
-        probed.modIdByFile().forEach((file, modId) -> fileByModId.putIfAbsent(modId, file));
+        Map<String, String> fileByModId = probed.providerByModId();
         Map<String, java.util.Set<String>> requires = new java.util.LinkedHashMap<>();
         probed.modIdByFile()
                 .forEach(
                         (file, modId) -> {
                             java.util.Set<String> required = new java.util.TreeSet<>();
-                            for (String neededId : probed.graph().directRequirementsOf(modId)) {
+                            for (String neededId : graph.directRequirementsOf(modId)) {
                                 String neededFile = fileByModId.get(neededId);
                                 if (neededFile != null) {
                                     required.add(neededFile);
@@ -241,6 +249,16 @@ public final class Main {
                                 requires.put(file, required);
                             }
                         });
+
+        List<cx.mia.lucent.laymark.core.select.Branching.Conflict> conflicts =
+                new java.util.ArrayList<>(probed.conflicts());
+        for (var conflict : overrides.conflicts()) {
+            String a = fileByModId.get(conflict.a());
+            String b = fileByModId.get(conflict.b());
+            if (a != null && b != null) {
+                conflicts.add(new cx.mia.lucent.laymark.core.select.Branching.Conflict(a, b));
+            }
+        }
 
         java.util.Set<String> installed =
                 new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(
@@ -310,6 +328,7 @@ public final class Main {
                         floor,
                         new java.util.TreeSet<>(candidates),
                         requires,
+                        List.copyOf(conflicts),
                         schedule,
                         probed.displayNameByFile()),
                 control,
