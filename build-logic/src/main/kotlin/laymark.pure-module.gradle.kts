@@ -25,6 +25,10 @@ val purityCheck = tasks.register<PurityCheckTask>("purityCheck") {
         "net.fabricmc",
         "com.mojang",
         "org.spongepowered.asm",
+        // Spark's API. `core` models what Spark reports without naming its types, so a result
+        // stays readable by a runner that has never heard of Spark -- and `runner` never links
+        // against an API whose implementation only exists inside the game.
+        "me.lucko",
     )
     stamp = layout.buildDirectory.file("reports/purity/${project.name}.txt")
 

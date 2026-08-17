@@ -6,7 +6,7 @@ import cx.mia.lucent.laymark.core.harness.HarnessPort;
 import cx.mia.lucent.laymark.core.harness.Measurement;
 import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
 import cx.mia.lucent.laymark.core.harness.GpuSample;
-import cx.mia.lucent.laymark.core.harness.TickSample;
+import cx.mia.lucent.laymark.core.harness.SparkStatistics;
 import cx.mia.lucent.laymark.core.harness.WorkCounters;
 import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
@@ -55,13 +55,13 @@ public final class MinecraftHarnessPort implements HarnessPort {
     private static final Duration SETTLE_AFTER_MOVE = Duration.ofSeconds(3);
 
     private final FrameRecorder recorder;
-    private final TickRecorder ticks;
     private final GpuTimer gpuTimer;
+    private final SparkChannel spark;
 
     public MinecraftHarnessPort(ClientChannels channels) {
         this.recorder = channels.frames();
-        this.ticks = channels.ticks();
         this.gpuTimer = channels.gpu();
+        this.spark = channels.spark();
     }
 
     @Override
@@ -170,32 +170,37 @@ public final class MinecraftHarnessPort implements HarnessPort {
         WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
         MemorySnapshot memoryBefore = Counters.memory();
 
+        // Spark's GC totals are cumulative, so the capture-scoped figure is a difference taken
+        // across the window; its tick statistics are rolling and are read at the end.
+        spark.start();
         ClientThread.run(
                 "starting the capture",
                 () -> {
                     gpuTimer.start();
                     recorder.start();
-                    // Same clock origin for both series, so a server tick and the frame it delayed
-                    // line up on one timeline rather than two that merely started at similar times.
-                    ticks.start(recorder.startedAtNanos());
                 });
 
         ClientThread.sleep(duration);
 
         List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
         List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
-        List<TickSample> serverTicks = ticks.stop();
+        SparkStatistics sparkStatistics = spark.stop();
 
         WorkCounters workAfter = ClientThread.call("reading work counters", Counters::work);
         MemorySnapshot memoryAfter = Counters.memory();
 
         return new Measurement(
-                frames, gpu, serverTicks, workBefore, workAfter, memoryBefore, memoryAfter);
+                frames, gpu, sparkStatistics, workBefore, workAfter, memoryBefore, memoryAfter);
     }
 
     /** Why the GPU channel is empty, or null when it worked. Reported as a run-level flag. */
     public String gpuUnavailableReason() {
         return ClientThread.call("checking gpu channel", gpuTimer::unavailableReason);
+    }
+
+    /** Why the Spark channel is empty, or null when it worked. */
+    public String sparkUnavailableReason() {
+        return spark.unavailableReason();
     }
 
     @Override

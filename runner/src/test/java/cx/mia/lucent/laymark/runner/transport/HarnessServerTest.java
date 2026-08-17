@@ -50,12 +50,14 @@ class HarnessServerTest {
             });
 
             List<Frame> received = new ArrayList<>();
-            try (HarnessClient client = HarnessClient.connect(server.port(), server.token(), 5_000)) {
+            HarnessClient client = HarnessClient.connect(server.port(), server.token(), 5_000);
+            CompletableFuture<Void> pumped;
+            try {
                 HarnessServer.Session session = accepted.get();
                 assertEquals(ProcessHandle.current().pid(), session.pid(),
                         "the handshake proves which process connected");
 
-                var pumped = CompletableFuture.runAsync(() -> {
+                pumped = CompletableFuture.runAsync(() -> {
                     try {
                         server.pump(session, received::add);
                     } catch (IOException e) {
@@ -66,9 +68,11 @@ class HarnessServerTest {
                 client.send(new Frame.ScenarioStarted("chunkgen", 1));
                 client.send(new Frame.PhaseEntered("chunkgen", Phase.UNGENERATED_TRAVERSAL, 42L));
                 client.send(new Frame.RunFinished("runs/r1/result.json"));
+            } finally {
+                // Closing is the end-of-stream signal the pump blocks on, not just cleanup.
                 client.close();
-                pumped.get();
             }
+            pumped.get();
 
             assertEquals(3, received.size(), received.toString());
             assertEquals(new Frame.ScenarioStarted("chunkgen", 1), received.get(0));
@@ -92,9 +96,11 @@ class HarnessServerTest {
                 }
             });
             Frame frame = new Frame.RunFailed("preset-drift", "renderDistance=12, expected 32");
-            try (HarnessClient client = HarnessClient.connect(server.port(), server.token(), 5_000)) {
+            HarnessClient client = HarnessClient.connect(server.port(), server.token(), 5_000);
+            CompletableFuture<Void> pumped;
+            try {
                 HarnessServer.Session session = accepted.get();
-                var pumped = CompletableFuture.runAsync(() -> {
+                pumped = CompletableFuture.runAsync(() -> {
                     try {
                         server.pump(session, f -> {});
                     } catch (IOException e) {
@@ -102,9 +108,11 @@ class HarnessServerTest {
                     }
                 });
                 client.send(frame);
+            } finally {
+                // Closing is the end-of-stream signal the pump blocks on, not just cleanup.
                 client.close();
-                pumped.get();
             }
+            pumped.get();
 
             List<String> lines = Files.readAllLines(events(), StandardCharsets.UTF_8);
             assertEquals(2, lines.size(), "the hello is part of the record too");
@@ -124,7 +132,7 @@ class HarnessServerTest {
                     throw new RuntimeException(e);
                 }
             });
-            try (HarnessClient ignored =
+            try (HarnessClient _ =
                     HarnessClient.connect(server.port(), "not-the-token", 5_000)) {
                 ExecutionException e = assertThrows(ExecutionException.class, accepted::get);
                 assertTrue(e.getCause() instanceof ProtocolException, String.valueOf(e.getCause()));

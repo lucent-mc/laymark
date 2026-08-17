@@ -6,7 +6,6 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientResourceLoadFinishedEvent;
 import net.neoforged.neoforge.client.event.FlipFrameEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
  * The trigger points a loader has to provide, and nothing else.
@@ -46,23 +45,6 @@ final class ClientHooks {
     @SubscribeEvent
     public void onRenderFramePost(RenderFrameEvent.Post event) {
         channels.onRenderFrameEnd();
-    }
-
-    /**
-     * Integrated-server tick boundaries.
-     *
-     * <p>Bracketed here rather than read from {@code MinecraftServer#getTickTimesNanos()}, which
-     * holds only the last hundred ticks — five seconds at full rate. Sampling that at the end of a
-     * long capture would describe its final sixth and present the answer as the whole.
-     */
-    @SubscribeEvent
-    public void onServerTickPre(ServerTickEvent.Pre event) {
-        channels.onServerTickStart();
-    }
-
-    @SubscribeEvent
-    public void onServerTickPost(ServerTickEvent.Post event) {
-        channels.onServerTickEnd();
     }
 
     /**

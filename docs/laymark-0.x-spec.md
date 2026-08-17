@@ -285,8 +285,9 @@ three-day run must never end with the realisation that the interesting channel w
 | Render call | vanilla `Minecraft.getFrameTimeNs()` | no |
 | Submit phase | `RenderFrameEvent.Pre`/`.Post` bracket | no |
 | GPU execution time | vanilla `TimerQuery`, harvested asynchronously | no |
-| Integrated-server tick time | `ServerTickEvent.Pre`/`.Post` bracket | no |
-| Heap and GC | `Runtime` and `GarbageCollectorMXBean`, read at each end | no |
+| Integrated-server MSPT and TPS | Spark statistics | no |
+| GC | Spark statistics | no |
+| Heap | `Runtime`, read at each end — `spark-api` exposes no heap | no |
 | Work performed | rendered sections, client chunks, server chunks, at each end | no |
 | Time per chunk | derived | for completion targets |
 | Throttle reason, per frame | `FramerateLimitTracker` | no |
@@ -324,24 +325,35 @@ already true, and the last few frames' queries are cancelled at the end of a win
 waited for. Timer queries are a driver capability: if anything about them fails, the channel
 switches itself off for the run and records why, rather than failing a run over a diagnostic.
 
-**Integrated-server tick time is bracketed, not sampled.** `MinecraftServer#getTickTimesNanos()`
-holds only the last hundred ticks — five seconds at full rate — so reading it at the end of a
-thirty-second capture would describe its final sixth and present the answer as the whole.
-
 **The throttle reason is recorded per frame** and analysed after the capture, so the hot path
 performs only a field read. A window that begins throttled is refused outright, since there is no
 measurement to qualify; a throttle that engages partway through leaves real samples with an
 artificial ceiling in the middle of them, and is flagged for the reader to weigh.
 
-**The statistics channels do not require Spark.** Server tick time comes from vanilla's own tick
-boundaries and heap/GC from the JVM's management beans — both are properties of the process rather
-than of Minecraft, so nothing has to be installed to read them and nothing extra runs inside the
-process being measured. This narrows Spark's role from the original decision on issue #6 without
-contradicting its reasoning: Laymark still reimplements none of Spark, it simply turns out not to
-need it for these two.
+**Laymark is designed around Spark and reimplements none of it.** Spark **statistics** are always
+on: MSPT, TPS and GC come from `spark-api` — `SparkProvider.get()` and the `mspt()`, `tps()` and
+`gc()` accessors — rather than from timing that Laymark does itself. Spark does this well, and a
+second implementation living beside it would be a second thing to be wrong.
 
-**Spark's remaining role is the profiler**, an opt-in diagnostic pass whose metrics can never
-reach a score:
+`spark-api` is `compileOnly`. It is never bundled: the installed Spark mod supplies the
+implementation at runtime, and shipping a copy would put a second one in the process being
+measured. Every access is guarded, because Spark may be absent and `SparkProvider.get()` throws
+before Spark has enabled. An absent Spark leaves the statistics channels empty and flags the run;
+it does not fail it.
+
+Two limits of that API, recorded because they change how the numbers read. Its statistics are
+**rolling windows**, not capture-scoped aggregates — the shortest are `MillisPerTick.SECONDS_10`
+and `TicksPerSecond.SECONDS_10` — so read at the end of a longer capture they describe its tail
+rather than the whole. The window length is stored beside the figures so a reader is told which
+period they cover instead of assuming it matches the capture. (This corrects
+`spark-chunky-control-surfaces-research.md`, which lists only the minute-and-longer windows for
+MSPT; the published jar has `SECONDS_10`.) GC is exempt — Spark reports cumulative totals, so that
+one really is differenced across the capture.
+
+Second limit: `spark-api` exposes no heap figure at all, so heap alone is read from `Runtime`. GC
+still comes from Spark.
+
+The Spark **profiler** is an opt-in diagnostic pass whose metrics can never reach a score:
 Spark ships no async-profiler binary for Windows and falls back to a sampler whose overhead scales
 with thread count — that is, with the thing being compared. `samplerEngine` is recorded in every
 result and results are never compared across engines.

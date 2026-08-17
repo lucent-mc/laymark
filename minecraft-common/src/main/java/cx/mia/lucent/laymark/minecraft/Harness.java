@@ -87,12 +87,16 @@ public final class Harness {
      * which one this is.
      */
     private static RunResult withChannelFlags(RunResult result, MinecraftHarnessPort port) {
-        String gpuUnavailable = port.gpuUnavailableReason();
-        if (gpuUnavailable == null) {
+        List<String> flags = new ArrayList<>(result.flags());
+        if (port.gpuUnavailableReason() != null) {
+            flags.add("gpu timing unavailable: " + port.gpuUnavailableReason());
+        }
+        if (port.sparkUnavailableReason() != null) {
+            flags.add("server statistics unavailable: " + port.sparkUnavailableReason());
+        }
+        if (flags.size() == result.flags().size()) {
             return result;
         }
-        List<String> flags = new ArrayList<>(result.flags());
-        flags.add("gpu timing unavailable on this machine: " + gpuUnavailable);
         return new RunResult(result.runId(), result.protocolVersion(), result.scenarios(), flags);
     }
 

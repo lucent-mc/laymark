@@ -18,13 +18,14 @@ import java.util.List;
  * @param frames per-frame CPU timings; the headline distribution lives here
  * @param gpu GPU execution time per frame, resolved several frames after the fact because reading
  *     a timer query eagerly means waiting for the GPU, which would change what is being measured
- * @param serverTicks integrated-server tick durations, the channel that catches a mod which costs
- *     nothing to draw and a great deal to simulate
+ * @param spark server health as Spark measures it — the channel that catches a mod costing
+ *     nothing to draw and a great deal to simulate. Null when Spark is not installed, which is
+ *     recorded as a run-level flag rather than treated as a failure.
  */
 public record Measurement(
         List<FrameSample> frames,
         List<GpuSample> gpu,
-        List<TickSample> serverTicks,
+        SparkStatistics spark,
         WorkCounters workBefore,
         WorkCounters workAfter,
         MemorySnapshot memoryBefore,
@@ -33,11 +34,10 @@ public record Measurement(
     public Measurement {
         frames = frames == null ? List.of() : List.copyOf(frames);
         gpu = gpu == null ? List.of() : List.copyOf(gpu);
-        serverTicks = serverTicks == null ? List.of() : List.copyOf(serverTicks);
     }
 
     public static Measurement empty() {
-        return new Measurement(List.of(), List.of(), List.of(), null, null, null, null);
+        return new Measurement(List.of(), List.of(), null, null, null, null, null);
     }
 
     /** The scored distribution. */
@@ -52,11 +52,6 @@ public record Measurement(
     /** @throws HarnessException if the GPU channel was unavailable */
     public FrameStatistics gpuStatistics() {
         return FrameStatistics.from(gpu, GpuSample::durationNanos);
-    }
-
-    /** @throws HarnessException if no server tick was observed */
-    public FrameStatistics serverTickStatistics() {
-        return FrameStatistics.from(serverTicks, TickSample::durationNanos);
     }
 
     /** Work completed during the window, or null when the counters were not both read. */
