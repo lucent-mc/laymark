@@ -1,7 +1,9 @@
 package cx.mia.lucent.laymark.core.plan;
 
+import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.util.List;
 
 /**
@@ -21,6 +23,9 @@ import java.util.List;
  * @param preset the graphics settings to pin before the world loads
  * @param pose where the player is placed and what it looks at
  * @param seed the world seed; identical across arms, or the comparison is between landscapes
+ * @param phase which of the four measured phases this is. Decides which preconditions are checked
+ *     and, for two of them, which negative precondition can fail the repetition.
+ * @param content scene geometry placed before measuring, in declaration order
  */
 public record ScenarioSpec(
         String id,
@@ -29,7 +34,10 @@ public record ScenarioSpec(
         int repetitions,
         Preset preset,
         Pose pose,
-        long seed) {
+        long seed,
+        Phase phase,
+        boolean generateStructures,
+        List<ScenePlacement> content) {
 
     public ScenarioSpec {
         if (id == null || id.isBlank()) {
@@ -48,9 +56,19 @@ public record ScenarioSpec(
         if (pose == null) {
             throw new PlanException("scenario " + id + " needs a pose");
         }
+        if (phase == null) {
+            throw new PlanException("scenario " + id + " needs a phase");
+        }
         dependsOn = dependsOn == null ? List.of() : List.copyOf(dependsOn);
+        content = content == null ? List.of() : List.copyOf(content);
         if (dependsOn.contains(id)) {
             throw new PlanException("scenario " + id + " depends on itself");
+        }
+        if (phase == Phase.SPAWN_GENERATION && !dependsOn.isEmpty()) {
+            // Spawn generation measures world creation itself, so it cannot begin in a world some
+            // earlier scenario already created. The config is asking for two incompatible things.
+            throw new PlanException(
+                    "scenario " + id + " measures spawn generation, so it cannot reuse a world");
         }
     }
 
@@ -62,7 +80,17 @@ public record ScenarioSpec(
      */
     public ScenarioSpec(
             String id, List<String> dependsOn, StopCondition stopCondition, int repetitions) {
-        this(id, dependsOn, stopCondition, repetitions, Preset.defaults(), DEFAULT_POSE, 0L);
+        this(
+                id,
+                dependsOn,
+                stopCondition,
+                repetitions,
+                Preset.defaults(),
+                DEFAULT_POSE,
+                0L,
+                Phase.RESIDENT_RENDER,
+                false,
+                List.of());
     }
 
     /** High enough to be clear of terrain at any elevation vanilla generates. */

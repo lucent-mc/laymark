@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cx.mia.lucent.laymark.core.Laymark;
+import cx.mia.lucent.laymark.core.harness.BarrierReport;
 import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.GpuSample;
 import cx.mia.lucent.laymark.core.harness.Measurement;
@@ -54,6 +55,8 @@ class ResultCodecTest {
                                         new WorkCounters(18, 41, 55),
                                         new MemorySnapshot(1_024, 4_096),
                                         new MemorySnapshot(2_048, 4_096)),
+                                new BarrierReport(
+                                        List.of(new BarrierReport.Condition("all sections built", 120, true)), 5, 200),
                                 5_000),
                         ScenarioResult.failed("traversal", 1, "world never became ready")),
                 List.of("machine was not quiet"));
@@ -116,6 +119,7 @@ class ResultCodecTest {
                                         new PresetReadback(Preset.defaults(), 800, 600, false),
                                         List.of(),
                                         withoutSpark,
+                                        BarrierReport.none(),
                                         1)),
                         List.of("server statistics unavailable: spark is not installed"));
 
@@ -185,6 +189,7 @@ class ResultCodecTest {
                                                         null,
                                                         null,
                                                         null),
+                                                BarrierReport.none(),
                                                 1))
                                 ,
                                 List.of())

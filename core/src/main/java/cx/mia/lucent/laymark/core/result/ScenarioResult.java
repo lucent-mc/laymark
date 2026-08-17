@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.core.result;
 
+import cx.mia.lucent.laymark.core.harness.BarrierReport;
 import cx.mia.lucent.laymark.core.harness.FrameStatistics;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.Measurement;
@@ -29,6 +30,7 @@ public record ScenarioResult(
         PresetReadback readback,
         List<String> flags,
         Measurement measurement,
+        BarrierReport barrier,
         long durationMillis) {
 
     public enum Outcome {
@@ -52,6 +54,8 @@ public record ScenarioResult(
         }
         flags = flags == null ? List.of() : List.copyOf(flags);
         measurement = measurement == null ? Measurement.empty() : measurement;
+
+        barrier = barrier == null ? BarrierReport.none() : barrier;
         if (outcome == Outcome.COMPLETED_WITH_FLAGS && flags.isEmpty()) {
             throw new HarnessException("flagged result for " + scenarioId + " carries no flags");
         }
@@ -63,11 +67,12 @@ public record ScenarioResult(
             PresetReadback readback,
             List<String> flags,
             Measurement measurement,
+            BarrierReport barrier,
             long durationMillis) {
         Outcome outcome =
                 flags == null || flags.isEmpty() ? Outcome.COMPLETED : Outcome.COMPLETED_WITH_FLAGS;
         return new ScenarioResult(
-                scenarioId, repetition, outcome, null, readback, flags, measurement, durationMillis);
+                scenarioId, repetition, outcome, null, readback, flags, measurement, barrier, durationMillis);
     }
 
     public static ScenarioResult failed(String scenarioId, int repetition, String reason) {
@@ -79,7 +84,8 @@ public record ScenarioResult(
                 null,
                 List.of(),
                 Measurement.empty(),
-                0);
+                BarrierReport.none(),
+                 0);
     }
 
     public boolean measured() {

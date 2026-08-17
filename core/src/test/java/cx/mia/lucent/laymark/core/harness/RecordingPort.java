@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.core.harness;
 
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,9 +48,34 @@ final class RecordingPort implements HarnessPort {
         created.add(spec);
     }
 
+    /** Negative preconditions default to satisfied; a test flips one to prove it is enforced. */
+    boolean targetUngenerated = true;
+    boolean targetUnmeshed = true;
+    final List<ScenePlacement> placed = new ArrayList<>();
+
     @Override
-    public void awaitReady(Duration timeout) {
+    public BarrierReport awaitReady(Duration timeout) {
         record("awaitReady");
+        return new BarrierReport(
+                List.of(new BarrierReport.Condition("all sections built", 120, true)), 5, 200);
+    }
+
+    @Override
+    public boolean targetIsUngenerated(Pose pose) {
+        record("targetIsUngenerated");
+        return targetUngenerated;
+    }
+
+    @Override
+    public boolean targetHasNoBuiltSections(Pose pose) {
+        record("targetHasNoBuiltSections");
+        return targetUnmeshed;
+    }
+
+    @Override
+    public void placeContent(List<ScenePlacement> content) {
+        record("placeContent");
+        placed.addAll(content);
     }
 
     @Override

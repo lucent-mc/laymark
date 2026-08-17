@@ -96,10 +96,20 @@ public final class HarnessRun {
         port.applyPreset(scenario.preset());
         port.createWorld(world);
 
+        // Spawn generation is a phase, not overhead: mods target spawn-chunk generation
+        // specifically, so the world coming up is itself something a scenario may be measuring.
         events.accept(
                 new Frame.PhaseEntered(scenario.id(), Phase.SPAWN_GENERATION, System.nanoTime()));
-        port.awaitReady(READY_TIMEOUT);
+        BarrierReport barrier = port.awaitReady(READY_TIMEOUT);
+
+        if (!scenario.content().isEmpty()) {
+            // Before positioning and before the barrier is re-confirmed: placing geometry changes
+            // what there is to build, so a barrier satisfied beforehand says nothing about after.
+            port.placeContent(scenario.content());
+        }
         port.position(scenario.pose());
+
+        requireNegativePrecondition(scenario);
 
         // After applying and loading, not before: the world load runs arbitrary mod code, and a
         // mod that reverts a setting does it there rather than during the setter call.
@@ -107,7 +117,7 @@ public final class HarnessRun {
         List<String> flags = new ArrayList<>(readback.deviationsFrom(scenario.preset()));
 
         events.accept(
-                new Frame.PhaseEntered(scenario.id(), Phase.RESIDENT_RENDER, System.nanoTime()));
+                new Frame.PhaseEntered(scenario.id(), scenario.phase(), System.nanoTime()));
         Measurement measurement = port.capture(captureWindow(scenario));
         if (!measurement.measured()) {
             throw new HarnessException("scenario " + scenario.id() + " captured no frames");
@@ -120,7 +130,42 @@ public final class HarnessRun {
                 readback,
                 flags,
                 measurement,
+                barrier,
                 Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
+    }
+
+    /**
+     * Fails the repetition if the work being measured has already happened.
+     *
+     * <p>Two of the four phases have this hazard, and it is the most dangerous failure mode in the
+     * whole harness: a traversal whose target was already generated, or a streaming phase whose
+     * sections are already meshed, <strong>completes normally and reports flatteringly good
+     * numbers</strong>. There is nothing in the output to distinguish it from a genuinely fast
+     * stack, so it fails the repetition rather than flagging it.
+     */
+    private void requireNegativePrecondition(ScenarioSpec scenario) {
+        switch (scenario.phase()) {
+            case UNGENERATED_TRAVERSAL -> {
+                if (!port.targetIsUngenerated(scenario.pose())) {
+                    throw new HarnessException(
+                            "scenario " + scenario.id()
+                                    + " measures generation, but its target was already generated;"
+                                    + " measuring it would report a cost that was already paid");
+                }
+            }
+            case GENERATED_STREAMING -> {
+                if (!port.targetHasNoBuiltSections(scenario.pose())) {
+                    throw new HarnessException(
+                            "scenario " + scenario.id()
+                                    + " measures client streaming, but the target is already"
+                                    + " meshed; the work it exists to time has already happened");
+                }
+            }
+            // Spawn generation is guaranteed fresh by construction -- every repetition creates its
+            // own save -- and resident render is the one phase where "already finished" is the
+            // point rather than a hazard.
+            case SPAWN_GENERATION, RESIDENT_RENDER -> {}
+        }
     }
 
     /**

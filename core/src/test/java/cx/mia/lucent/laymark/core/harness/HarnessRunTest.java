@@ -11,6 +11,7 @@ import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -29,7 +30,10 @@ class HarnessRunTest {
                 repetitions,
                 Preset.defaults(),
                 Pose.lookingDown(100.5, 120, -64.5),
-                42L);
+                42L,
+                Phase.RESIDENT_RENDER,
+                false,
+                List.of());
     }
 
     private RunResult run(ScenarioSpec... scenarios) {
@@ -158,6 +162,103 @@ class HarnessRunTest {
         assertTrue(measurement.millisPerChunkReceived() > 0, "the duration-independent quantity");
     }
 
+    private static ScenarioSpec phased(String id, Phase phase) {
+        return new ScenarioSpec(
+                id,
+                List.of(),
+                new StopCondition.FixedDuration(5_000),
+                1,
+                Preset.defaults(),
+                Pose.lookingDown(0.5, 200, 0.5),
+                7L,
+                phase,
+                false,
+                List.of());
+    }
+
+    /**
+     * The most dangerous failure mode in the harness: a traversal whose target was already
+     * generated completes normally and reports flatteringly good numbers, and nothing in the
+     * output distinguishes it from a genuinely fast stack.
+     */
+    @Test
+    void failsATraversalWhoseTargetWasAlreadyGenerated() {
+        port.targetUngenerated = false;
+
+        ScenarioResult only =
+                run(phased("traversal", Phase.UNGENERATED_TRAVERSAL)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.FAILED, only.outcome());
+        assertTrue(only.failureReason().contains("already generated"), only.failureReason());
+        assertFalse(port.calls.contains("capture"), "it must not measure a cost already paid");
+    }
+
+    @Test
+    void failsAStreamingPhaseWhoseTargetIsAlreadyMeshed() {
+        port.targetUnmeshed = false;
+
+        ScenarioResult only =
+                run(phased("streaming", Phase.GENERATED_STREAMING)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.FAILED, only.outcome());
+        assertTrue(only.failureReason().contains("already"), only.failureReason());
+        assertFalse(port.calls.contains("capture"));
+    }
+
+    /** Resident render's whole point is that everything already finished. */
+    @Test
+    void doesNotImposeANegativePreconditionOnPhasesWithoutOne() {
+        run(phased("resident", Phase.RESIDENT_RENDER));
+
+        assertFalse(port.calls.contains("targetIsUngenerated"));
+        assertFalse(port.calls.contains("targetHasNoBuiltSections"));
+        assertTrue(port.calls.contains("capture"));
+    }
+
+    @Test
+    void reportsTheDeclaredPhaseRatherThanAFixedOne() {
+        run(phased("traversal", Phase.UNGENERATED_TRAVERSAL));
+
+        List<Phase> phases =
+                frames.stream()
+                        .filter(Frame.PhaseEntered.class::isInstance)
+                        .map(f -> ((Frame.PhaseEntered) f).phase())
+                        .toList();
+        assertEquals(List.of(Phase.SPAWN_GENERATION, Phase.UNGENERATED_TRAVERSAL), phases);
+    }
+
+    /** Geometry changes what there is to build, so a barrier satisfied before it means nothing. */
+    @Test
+    void placesSceneContentBeforePositioningAndMeasuring() {
+        ScenarioSpec withScene =
+                new ScenarioSpec(
+                        "scene",
+                        List.of(),
+                        new StopCondition.FixedDuration(1_000),
+                        1,
+                        Preset.defaults(),
+                        Pose.lookingDown(0.5, 200, 0.5),
+                        7L,
+                        Phase.RESIDENT_RENDER,
+                        false,
+                        List.of(new ScenePlacement("scenes/pen.schem", 0, 64, 0)));
+
+        run(withScene);
+
+        assertEquals(1, port.placed.size());
+        assertTrue(port.calls.indexOf("placeContent") < port.calls.indexOf("position"));
+        assertTrue(port.calls.indexOf("placeContent") < port.calls.indexOf("capture"));
+    }
+
+    /** The barrier is apparatus, so what it waited on travels with the result. */
+    @Test
+    void recordsWhatTheBarrierWaitedOn() {
+        ScenarioResult only = run(scenario("resident", 1)).scenarios().get(0);
+
+        assertEquals(5, only.barrier().stablePolls());
+        assertEquals("all sections built", only.barrier().slowest().name());
+    }
+
     @Test
     void aFailedRepetitionIsRecordedRatherThanAbandoningTheRun() {
         port.failOnCall = "awaitReady";
@@ -203,7 +304,10 @@ class HarnessRunTest {
                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
-                        1L);
+                        1L,
+                        Phase.RESIDENT_RENDER,
+                        false,
+                        List.of());
 
         ScenarioResult only = run(chunks).scenarios().get(0);
 
@@ -223,7 +327,10 @@ class HarnessRunTest {
                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
-                        1L);
+                        1L,
+                        Phase.RESIDENT_RENDER,
+                        false,
+                        List.of());
 
         RunResult result =
                 new HarnessRun(RunPlan.of("run-1", "/out", List.of(second, first)), port, frames::add)

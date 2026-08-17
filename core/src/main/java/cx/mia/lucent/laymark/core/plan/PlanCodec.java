@@ -61,6 +61,17 @@ public final class PlanCodec {
         return java.util.Set.copyOf(BY_NAME.keySet());
     }
 
+    /**
+     * The stop-condition adapter, shared with the scenario config codec.
+     *
+     * <p>Shared rather than duplicated so the shape an operator writes in a config is exactly the
+     * shape that gets archived in the plan beside their results. Two registries would be two
+     * chances for those to drift.
+     */
+    public static Object stopConditionAdapter() {
+        return new StopConditionAdapter();
+    }
+
     // registerTypeAdapter, not registerTypeHierarchyAdapter. A hierarchy adapter also claims the
     // concrete variants, so the adapter's own context.serialize(src, src.getClass()) re-enters it
     // and recurses until the stack dies. Binding to the interface alone lets the variant fall

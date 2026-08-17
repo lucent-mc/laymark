@@ -22,7 +22,8 @@ class PlanCodecTest {
             "preset":{"renderDistance":12,"simulationDistance":12,"framerateLimit":260,
              "vsync":false,"particles":"ALL","clouds":"FANCY",
              "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70},
-            "pose":{"x":0.5,"y":200.0,"z":0.5,"yaw":0.0,"pitch":90.0},"seed":0
+            "pose":{"x":0.5,"y":200.0,"z":0.5,"yaw":0.0,"pitch":90.0},"seed":0,
+            "phase":"RESIDENT_RENDER","generateStructures":false,"content":[]
             """;
 
     static Stream<StopCondition> everyStopCondition() {

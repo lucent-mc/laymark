@@ -12,13 +12,22 @@ import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
 import cx.mia.lucent.laymark.core.harness.WorldSpec;
+import cx.mia.lucent.laymark.core.harness.BarrierReport;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
 import java.time.Duration;
 import java.util.List;
-import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
@@ -58,6 +67,9 @@ public final class MinecraftHarnessPort implements HarnessPort {
     private final GpuTimer gpuTimer;
     private final SparkChannel spark;
 
+    /** The save this run created, remembered so disk-level questions can be asked about it. */
+    private volatile String currentLevelId;
+
     public MinecraftHarnessPort(ClientChannels channels) {
         this.recorder = channels.frames();
         this.gpuTimer = channels.gpu();
@@ -83,6 +95,8 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 Duration.ofMinutes(10),
                 () -> {
                     Minecraft minecraft = Minecraft.getInstance();
+                    currentLevelId = spec.levelId();
+
                     LevelStorageSource source = minecraft.getLevelSource();
                     if (source.levelExists(spec.levelId())
                             || !source.isNewLevelIdAcceptable(spec.levelId())) {
@@ -115,17 +129,83 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 });
     }
 
+    /**
+     * Polls the composite barrier, timing each condition separately.
+     *
+     * <p>Per condition rather than one predicate because the result has to say <em>which</em> one
+     * gated the run. A stack whose renderer takes twenty seconds to build out and one whose server
+     * takes twenty seconds to report loaded are different problems that a single "ready after 20s"
+     * cannot distinguish — and one of those conditions is answered by a subsystem that
+     * renderer-replacing mods reimplement.
+     */
     @Override
-    public void awaitReady(Duration timeout) {
-        if (!ClientThread.await(
-                "waiting for the world",
-                timeout,
-                POLL_INTERVAL,
-                STABLE_POLLS,
-                Readiness::worldIsMeasurable)) {
-            throw new HarnessException(
-                    "world was not measurable within " + timeout.toSeconds() + "s");
+    public BarrierReport awaitReady(Duration timeout) {
+        List<Readiness.Condition> conditions =
+                ClientThread.call("listing barrier conditions", Readiness::worldConditions);
+        long startedAt = System.nanoTime();
+        long deadline = startedAt + timeout.toNanos();
+
+        Map<String, Long> satisfiedAt = new LinkedHashMap<>();
+        Set<String> everBlocked = new LinkedHashSet<>();
+        int consecutive = 0;
+
+        while (System.nanoTime() < deadline) {
+            List<String> unmet =
+                    ClientThread.call(
+                            "checking the barrier",
+                            () ->
+                                    conditions.stream()
+                                            .filter(c -> !c.satisfied().getAsBoolean())
+                                            .map(Readiness.Condition::name)
+                                            .toList());
+
+            long elapsed = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+            for (Readiness.Condition condition : conditions) {
+                if (unmet.contains(condition.name())) {
+                    everBlocked.add(condition.name());
+                    satisfiedAt.remove(condition.name());
+                } else {
+                    satisfiedAt.putIfAbsent(condition.name(), elapsed);
+                }
+            }
+
+            // Stability, not a single true. These signals flicker: the renderer reports everything
+            // built and then another chunk arrives.
+            consecutive = unmet.isEmpty() ? consecutive + 1 : 0;
+            if (consecutive >= STABLE_POLLS) {
+                return report(conditions, satisfiedAt, everBlocked, startedAt);
+            }
+            ClientThread.sleep(POLL_INTERVAL);
         }
+
+        throw new HarnessException(
+                "world was not measurable within "
+                        + timeout.toSeconds()
+                        + "s; still waiting on "
+                        + conditions.stream()
+                                .map(Readiness.Condition::name)
+                                .filter(name -> !satisfiedAt.containsKey(name))
+                                .toList());
+    }
+
+    private static BarrierReport report(
+            List<Readiness.Condition> conditions,
+            Map<String, Long> satisfiedAt,
+            Set<String> everBlocked,
+            long startedAt) {
+        List<BarrierReport.Condition> recorded =
+                conditions.stream()
+                        .map(
+                                condition ->
+                                        new BarrierReport.Condition(
+                                                condition.name(),
+                                                satisfiedAt.getOrDefault(condition.name(), 0L),
+                                                everBlocked.contains(condition.name())))
+                        .toList();
+        return new BarrierReport(
+                recorded,
+                STABLE_POLLS,
+                Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
     }
 
     @Override
@@ -154,6 +234,90 @@ public final class MinecraftHarnessPort implements HarnessPort {
         // teleport invalidated the sections the earlier barrier was satisfied by.
         ClientThread.sleep(SETTLE_AFTER_MOVE);
         awaitReady(Duration.ofMinutes(2));
+    }
+
+    /**
+     * Whether the target region has never been generated, judged from the region file on disk.
+     *
+     * <p>Deliberately conservative, and the direction matters. A region file's <em>absence</em>
+     * proves nothing in that 512-block square was ever generated; its presence only proves
+     * something nearby was. So an absent file answers "ungenerated" and a present one answers
+     * "assume generated", which fails the repetition. Erring the other way would let a traversal
+     * measure a cost that had already been paid and report it as a fast run.
+     */
+    @Override
+    public boolean targetIsUngenerated(Pose pose) {
+        return ClientThread.call(
+                "checking whether the target was generated",
+                () -> {
+                    MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+                    if (server == null) {
+                        throw new HarnessException("no integrated server");
+                    }
+                    ServerLevel level = server.overworld();
+                    if (level.getChunkSource().hasChunk(pose.chunkX(), pose.chunkZ())) {
+                        // Loaded right now, so certainly generated.
+                        return false;
+                    }
+                    if (currentLevelId == null) {
+                        throw new HarnessException("no world has been created by this run");
+                    }
+                    Path region =
+                            Minecraft.getInstance()
+                                    .getLevelSource()
+                                    .getLevelPath(currentLevelId)
+                                    .resolve("region")
+                                    .resolve(
+                                            "r."
+                                                    + Math.floorDiv(pose.chunkX(), REGION_CHUNKS)
+                                                    + "."
+                                                    + Math.floorDiv(pose.chunkZ(), REGION_CHUNKS)
+                                                    + ".mca");
+                    return !Files.exists(region);
+                });
+    }
+
+    /** A region file covers a 32x32 square of chunks. */
+    private static final int REGION_CHUNKS = 32;
+
+    /**
+     * Whether the client holds no compiled mesh for the target.
+     *
+     * <p>Not a claim about disk. After generation the region files sit in the OS page cache and a
+     * mod cannot portably evict them, so this asks only what the renderer has built.
+     */
+    @Override
+    public boolean targetHasNoBuiltSections(Pose pose) {
+        return ClientThread.call(
+                "checking whether the target is meshed",
+                () -> {
+                    Minecraft minecraft = Minecraft.getInstance();
+                    if (minecraft.level == null) {
+                        return true;
+                    }
+                    BlockPos at =
+                            BlockPos.containing(pose.x(), pose.y(), pose.z());
+                    return !minecraft.levelRenderer.isSectionCompiledAndVisible(at);
+                });
+    }
+
+    /**
+     * Places scene geometry.
+     *
+     * <p>Not implemented, and it refuses rather than doing nothing. A scenario that declares a
+     * scene and measures an empty world would complete normally and produce numbers for a
+     * different experiment than the one the config describes — which is the exact failure this
+     * project spends most of its effort preventing.
+     */
+    @Override
+    public void placeContent(List<ScenePlacement> content) {
+        if (!content.isEmpty()) {
+            throw new HarnessException(
+                    "this build cannot place scene geometry, and "
+                            + content.size()
+                            + " placement(s) were declared; measuring the empty world instead would"
+                            + " answer a different question than the config asked");
+        }
     }
 
     @Override
