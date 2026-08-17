@@ -97,7 +97,7 @@ public final class BenchmarkRun {
                 HarnessServer.Session session = handshake(server, game, timeout, stdout, stderr);
                 System.out.printf("handshake ok from pid %d; the run has started%n", session.pid());
 
-                return collect(server, session, game, outputDirectory, timeout, listener);
+                return collect(server, session, game, outputDirectory, timeout, listener, plan);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new LaunchException("interrupted during the run", e);
@@ -132,7 +132,8 @@ public final class BenchmarkRun {
             GameProcess game,
             Path outputDirectory,
             Duration timeout,
-            ExperimentListener listener)
+            ExperimentListener listener,
+            RunPlan plan)
             throws IOException, InterruptedException {
 
         AtomicReference<Frame> terminal = new AtomicReference<>();
@@ -181,15 +182,25 @@ public final class BenchmarkRun {
             throw new LaunchException("the run failed: " + failed.reason() + ": " + failed.detail());
         }
 
-        return readResult(((Frame.RunFinished) outcome).resultPath());
+        return readResult(((Frame.RunFinished) outcome).resultPath(), plan);
     }
 
-    private static RunResult readResult(String path) throws IOException {
+    private static RunResult readResult(String path, RunPlan plan) throws IOException {
         Path resultPath = Path.of(path);
         if (!Files.isRegularFile(resultPath)) {
             throw new LaunchException("the harness reported a result at " + path + " that is not there");
         }
-        return ResultCodec.read(Files.readString(resultPath, StandardCharsets.UTF_8));
+        RunResult result = ResultCodec.read(Files.readString(resultPath, StandardCharsets.UTF_8));
+        // The one check that catches a stale mod build. A harness from before a protocol-compatible
+        // change happily runs whatever it knows how to read -- observed running a leftover plan
+        // file from a previous run -- and everything downstream then scores the wrong scenarios.
+        if (!plan.runId().equals(result.runId())) {
+            throw new LaunchException(
+                    "the game executed run " + result.runId() + " but this launch is "
+                            + plan.runId() + "; the Laymark mod in the instance is a stale build"
+                            + " running something it found on disk -- update mods/laymark-*.jar");
+        }
+        return result;
     }
 
     /**

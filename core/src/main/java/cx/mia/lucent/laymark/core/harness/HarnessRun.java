@@ -11,7 +11,11 @@ import cx.mia.lucent.laymark.core.result.PhaseResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -61,13 +65,57 @@ public final class HarnessRun {
         List<ScenarioSpec> order = plan.executionOrder();
         WorldLeases leases = WorldLeases.of(order);
         List<ScenarioResult> results = new ArrayList<>();
+        Map<String, Set<Integer>> failedRepetitions = new HashMap<>();
 
         for (ScenarioSpec scenario : order) {
             for (int repetition = 1; repetition <= scenario.repetitions(); repetition++) {
-                results.add(runRepetition(scenario, repetition, leases));
+                // A dependency that failed leaves a world that is partly what the config describes
+                // and partly whatever the failure left behind. Measured on a real run: generation
+                // timed out, and the streaming scenario depending on it passed its pose-local
+                // preconditions and spent its capture half loading terrain, half generating the
+                // rest -- a plausible number for work the scenario does not claim to measure.
+                String failedDependency = failedDependency(scenario, repetition, failedRepetitions);
+                ScenarioResult result;
+                if (failedDependency != null) {
+                    String reason =
+                            "dependency " + failedDependency + " did not complete, so the world"
+                                    + " this scenario measures in is not the one its config"
+                                    + " describes";
+                    events.accept(new Frame.ScenarioStarted(scenario.id(), repetition));
+                    events.accept(new Frame.ScenarioFinished(scenario.id(), false, reason));
+                    result = ScenarioResult.failed(scenario.id(), repetition, reason);
+                    // The lease is still released; the world is no more useful to anyone else.
+                    if (leases.release(scenario.id(), repetition)) {
+                        discard(
+                                WorldSpec.forRepetition(
+                                        plan.runId(),
+                                        leases.ownerOf(scenario.id()),
+                                        repetition,
+                                        scenario.seed()));
+                    }
+                } else {
+                    result = runRepetition(scenario, repetition, leases);
+                }
+                if (result.outcome() == ScenarioResult.Outcome.FAILED) {
+                    failedRepetitions
+                            .computeIfAbsent(scenario.id(), unused -> new HashSet<>())
+                            .add(repetition);
+                }
+                results.add(result);
             }
         }
         return new RunResult(plan.runId(), Laymark.PROTOCOL_VERSION, results, runFlags);
+    }
+
+    /** The direct dependency whose same-numbered repetition failed, or null when all held. */
+    private static String failedDependency(
+            ScenarioSpec scenario, int repetition, Map<String, Set<Integer>> failed) {
+        for (String dependency : scenario.dependsOn()) {
+            if (failed.getOrDefault(dependency, Set.of()).contains(repetition)) {
+                return dependency;
+            }
+        }
+        return null;
     }
 
     private ScenarioResult runRepetition(

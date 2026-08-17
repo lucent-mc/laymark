@@ -221,7 +221,11 @@ public final class Main {
                     listener);
             System.out.printf("%nreport written to %s%n", outputDirectory.resolve("report.md"));
         } catch (Exception e) {
-            System.err.println("failed: " + e);
+            // On stdout with the trace, not a one-line stderr aside: this is the only account of
+            // why an experiment died, and it has to land in the window's log where the operator
+            // is actually looking.
+            System.out.println("\nthe experiment failed: " + e.getMessage());
+            e.printStackTrace(System.out);
             listener.finished(null);
         }
     }
