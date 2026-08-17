@@ -63,3 +63,10 @@ tasks.named<cx.mia.lucent.laymark.build.PurityCheckTask>("purityCheck") {
 application {
     mainClass = "cx.mia.lucent.laymark.runner.Main"
 }
+
+// The commented reference config rides in the jar, single-sourced from docs/: it is what the
+// planner's Edit button writes when no config exists yet, so the first thing an operator sees in
+// their editor is the whole schema explaining itself.
+tasks.processResources {
+    from(rootProject.file("docs/laymark-reference.jsonc"))
+}

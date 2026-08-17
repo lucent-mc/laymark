@@ -1,0 +1,142 @@
+// config/laymark.json — the complete reference.
+//
+// This file IS the plan: hand-authored, read by the runner for scheduling and by the in-game
+// harness for execution. Comments (// and /* */) are allowed and ignored. Unknown fields are
+// refused, loudly — a typo becomes an error, never a silently different run.
+//
+// Copy this next to your instance as config/laymark.json and delete what you don't need.
+// Every field marked (optional) has the default shown.
+{
+  // Schema version. Bumped only when an existing document would be read WRONGLY,
+  // not merely partially. Currently always 1.
+  "version": 1,
+
+  // Reusable settings bundles, referenced by name from a scenario's "settings".
+  // Any field left out takes the default shown. (optional; default: no presets)
+  "settingsPresets": {
+    "example": {
+      "renderDistance": 12,      // chunks, 2..32                      (default 12)
+      "simulationDistance": 12,  // chunks, 5..32 — server tick range  (default 12)
+      "particles": "ALL",        // ALL | DECREASED | MINIMAL          (default ALL)
+      "clouds": "FANCY",         // OFF | FAST | FANCY                 (default FANCY)
+      "entityShadows": true,     //                                    (default true)
+      "biomeBlendRadius": 2,     // 0..7                               (default 2)
+      "fieldOfView": 70          // degrees, 30..110                   (default 70)
+      // NOT configurable, by design — a config that could set these could censor its
+      // own results:
+      //   framerate limit   forced uncapped
+      //   vsync             forced off
+      //   window            forced 1600x900 windowed, pinned top-left
+      //   graphics preset   (Fast/Fancy/Fabulous) resolves differently per GPU/OS,
+      //                     so only the enumerated settings above exist
+    }
+  },
+
+  // The scenarios, run in declaration order. Array position is part of a scenario's
+  // identity — scenario 1 runs against a colder JVM than scenario 5 — so append new
+  // scenarios rather than inserting them if you want results comparable across runs.
+  "scenarios": [
+    {
+      // Stable id. Results are keyed by it; dependsOn refers to it. Required.
+      "id": "chunk-generation",
+
+      // What to capture. One name or a list. Nothing is measured implicitly. Required.
+      //   SPAWN_GENERATION      world creation through the join barrier. Its frame
+      //                         channel sits under a vanilla 60fps menu cap (flagged,
+      //                         expected); the signal is duration and work counters.
+      //   UNGENERATED_TRAVERSAL generation and everything downstream: the capture
+      //                         brackets a teleport into terrain that has NEVER been
+      //                         generated. Hard-fails if the target already exists —
+      //                         so keep the pose far from spawn (see "pose").
+      //   GENERATED_STREAMING   client-side streaming from disk: deserialize, send,
+      //                         mesh, upload. Needs terrain that already exists —
+      //                         either dependsOn a generating scenario (same world is
+      //                         reused) or Chunky installed (pre-generates off the
+      //                         measured path). Hard-fails if the client already holds
+      //                         the meshes.
+      //   RESIDENT_RENDER       the steady render path, everything loaded and settled.
+      // Combinations are allowed: ["SPAWN_GENERATION", "RESIDENT_RENDER"] measures
+      // both phases in one repetition, in that order.
+      "measure": "UNGENERATED_TRAVERSAL",
+
+      // When the capture ends — and therefore which number is the scored one. Required
+      // for completion phases; RESIDENT_RENDER defaults to 30s of TIME. (optional there)
+      "stop": {
+        // TIME    target = milliseconds of capture. Same window in both arms; frame
+        //         distributions compare directly. timeout optional (2x target).
+        // CHUNKS  target = chunks loaded around the pose, judged under the game's own
+        //         send predicate. Windows differ per arm, so the scored metric becomes
+        //         time-per-chunk. timeout REQUIRED.
+        // FRAMES  target = frames presented. Equal sample counts; unequal wall-clock.
+        //         timeout REQUIRED.
+        "kind": "CHUNKS",
+        // A number, or the one named target:
+        //   "all-in-radius"  every chunk the game will actually send for the preset's
+        //                    render distance (a flattened disc, ~3725 at rd 32 — NOT
+        //                    the enclosing square). Stays correct when you change the
+        //                    render distance; a literal number does not.
+        "target": "all-in-radius",
+        "timeout": 1800000  // ms; a completion target with no timeout would hang a
+                            // broken stack forever, so it is required
+      },
+
+      // Fresh world per repetition; more repetitions buy narrower intervals.
+      // Comparisons need at least 2 candidate samples per scenario — the schedule's
+      // C-passes supply them (A,B,C,B,C runs each candidate twice). (optional, 1)
+      "repetitions": 1,
+
+      // A preset name from settingsPresets, or the settings object written inline.
+      // One field, two spellings — never both. (optional; all defaults)
+      "settings": "example",
+
+      // Where the player stands and looks. pitch 90 = straight down. (optional;
+      // default 0.5/200/0.5 looking down)
+      // TRAP: chunk (0,0) is spawn, which world creation always generates — an
+      // UNGENERATED_TRAVERSAL pose near spawn hard-fails its precondition. Keep
+      // generation targets tens of thousands of blocks out.
+      "pose": { "x": 32768.5, "y": 500.0, "z": 32768.5, "yaw": 0.0, "pitch": 90.0 },
+
+      // Fixed so both arms generate identical terrain. (optional, 1)
+      "seed": 1,
+
+      // Villages, strongholds, etc. Off keeps generation cost uniform. (optional, false)
+      "generateStructures": false,
+
+      // Scene geometry placed before the barrier, in order. Sponge Schematic v3
+      // (.schem — WorldEdit/FAWE/Litematica export). Paths are relative to this
+      // config file; absolute paths and .. are refused. (optional, none)
+      "content": [
+        // { "schematic": "scenes/pen.schem", "originX": 32760, "originY": 200, "originZ": 32760 }
+      ],
+
+      // Scenarios that must run first. Dependency means WORLD REUSE: this scenario
+      // runs in the world its dependency generated (reopened, so the client's meshes
+      // are dropped but the terrain stays). One dependency at most — two would name
+      // two worlds. Repetition counts must match the dependency's. A scenario whose
+      // dependency failed fails fast rather than measuring the wreckage. (optional)
+      "dependsOn": []
+    },
+
+    {
+      // The classic pairing: measure loading the terrain the scenario above generated.
+      "id": "chunk-loading",
+      "dependsOn": ["chunk-generation"],
+      "measure": "GENERATED_STREAMING",
+      "settings": "example",
+      "pose": { "x": 32768.5, "y": 500.0, "z": 32768.5, "yaw": 0.0, "pitch": 90.0 },
+      "seed": 1,
+      "stop": { "kind": "CHUNKS", "target": "all-in-radius", "timeout": 600000 }
+    }
+  ]
+}
+
+// Related files, same directory:
+//   laymark-dependencies.json   operator dependency overrides (mod-id vocabulary):
+//     { "requires": { "some_mod": ["library_it_forgot"] },
+//       "incompatible": [ ["mod_a", "mod_b"] ] }
+//
+// For Inlay users — keep Laymark's files out of your layer via .layignore:
+//   laymark-runner-*.jar
+//   .laymark/
+//   config/laymark.json
+//   config/laymark-dependencies.json

@@ -54,6 +54,13 @@ public final class ConfigCodec {
     }
 
     /**
+     * Reads a config, comments included.
+     *
+     * <p>{@code //} and <code>/* *&#47;</code> comments are accepted — the config is hand-authored
+     * and a schema someone can annotate in place is a schema they can actually learn. The archived
+     * plan is still written as strict JSON; leniency is for what humans write, not what Laymark
+     * records.
+     *
      * @throws PlanException if the document is malformed or describes an invalid config
      */
     public static ScenarioConfig read(String json) {
@@ -61,7 +68,9 @@ public final class ConfigCodec {
             throw new PlanException("scenario config is empty");
         }
         try {
-            ScenarioConfig config = GSON.fromJson(json, ScenarioConfig.class);
+            var reader = new com.google.gson.stream.JsonReader(new java.io.StringReader(json));
+            reader.setStrictness(com.google.gson.Strictness.LENIENT);
+            ScenarioConfig config = GSON.fromJson(reader, ScenarioConfig.class);
             if (config == null) {
                 throw new PlanException("scenario config is empty");
             }

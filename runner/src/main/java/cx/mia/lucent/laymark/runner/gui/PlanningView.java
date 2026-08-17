@@ -239,16 +239,19 @@ public final class PlanningView extends JPanel {
         try {
             if (!Files.isRegularFile(path)) {
                 Files.createDirectories(path.getParent());
-                Files.writeString(
-                        path,
-                        """
-                        {
-                          "version": 1,
-                          "settingsPresets": {},
-                          "scenarios": []
-                        }
-                        """,
-                        StandardCharsets.UTF_8);
+                // The commented reference, not an empty stub: comments parse (the codec reads
+                // JSONC), so the first thing the editor shows is the schema explaining itself.
+                try (var reference =
+                        PlanningView.class.getResourceAsStream("/laymark-reference.jsonc")) {
+                    if (reference != null) {
+                        Files.copy(reference, path);
+                    } else {
+                        Files.writeString(
+                                path,
+                                "{\n  \"version\": 1,\n  \"settingsPresets\": {},\n  \"scenarios\": []\n}\n",
+                                StandardCharsets.UTF_8);
+                    }
+                }
             }
             java.awt.Desktop.getDesktop().open(path.toFile());
         } catch (java.io.IOException | RuntimeException e) {
