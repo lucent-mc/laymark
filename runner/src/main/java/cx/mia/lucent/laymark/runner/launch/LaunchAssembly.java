@@ -36,6 +36,8 @@ public final class LaunchAssembly {
     /**
      * @param port loopback port the runner is already listening on
      * @param token single-use nonce the mod must echo in its first frame
+     * @param runId what the harness resolves the config under; with the output directory, the only
+     *     run-shaped facts the config itself cannot carry
      */
     public static List<String> assemble(
             VersionDescriptor descriptor,
@@ -43,13 +45,18 @@ public final class LaunchAssembly {
             HostPlatform platform,
             OfflineIdentity identity,
             int port,
-            String token) {
+            String token,
+            String runId,
+            String outputDirectory) {
 
         if (token == null || token.isBlank()) {
             throw new LaunchException("a launch needs a handshake token");
         }
         if (port <= 0 || port > 65535) {
             throw new LaunchException("port out of range: " + port);
+        }
+        if (runId == null || runId.isBlank() || outputDirectory == null || outputDirectory.isBlank()) {
+            throw new LaunchException("a launch needs a run id and an output directory");
         }
 
         String classpath = classpath(descriptor, layout, platform);
@@ -61,6 +68,8 @@ public final class LaunchAssembly {
         argv.add("-Djava.awt.headless=true");
         argv.add("-D" + Laymark.PROPERTY_PORT + "=" + port);
         argv.add("-D" + Laymark.PROPERTY_TOKEN + "=" + token);
+        argv.add("-D" + Laymark.PROPERTY_RUN_ID + "=" + runId);
+        argv.add("-D" + Laymark.PROPERTY_OUTPUT + "=" + outputDirectory);
 
         for (VersionDescriptor.Argument argument : descriptor.jvmArguments()) {
             if (VersionDescriptor.admitted(argument.rules(), platform)) {

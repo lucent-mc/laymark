@@ -65,7 +65,7 @@ public final class BenchmarkRun {
         Path stdout = outputDirectory.resolve("game-stdout.log");
         Path stderr = outputDirectory.resolve("game-stderr.log");
 
-        writePlan(instance, plan);
+        requireConfig(instance);
         stageScenes(instance, plan, sceneRoot);
 
         // Bind before launching. The port then exists before anything could connect to it, so
@@ -79,7 +79,9 @@ public final class BenchmarkRun {
                             HostPlatform.current(),
                             OfflineIdentity.of("LaymarkProbe"),
                             server.port(),
-                            server.token());
+                            server.token(),
+                            plan.runId(),
+                            plan.outputDirectory());
 
             System.out.printf(
                     "listening on 127.0.0.1:%d%nrunning %d scenario(s) from plan %s%n",
@@ -191,15 +193,17 @@ public final class BenchmarkRun {
     }
 
     /**
-     * Writes the plan into the instance so the harness can find it.
+     * Confirms the config the harness will read is there, before paying for a launch.
      *
-     * <p>The one place the runner writes inside the instance. It is Laymark's own config
-     * directory, and it is overwritten every run.
+     * <p>The runner never writes it. {@code config/laymark.json} is hand-authored and both sides
+     * resolve the same document, so there is no plan file to stage and nothing to drift.
      */
-    private static void writePlan(ModrinthInstance instance, RunPlan plan) throws IOException {
-        Path path = instance.gameDirectory().resolve(Laymark.PLAN_PATH);
-        Files.createDirectories(path.getParent());
-        Files.writeString(path, PlanCodec.write(plan), StandardCharsets.UTF_8);
+    private static void requireConfig(ModrinthInstance instance) {
+        if (!Files.isRegularFile(instance.gameDirectory().resolve(Laymark.CONFIG_PATH))) {
+            throw new LaunchException(
+                    "no scenario config at " + instance.gameDirectory().resolve(Laymark.CONFIG_PATH)
+                            + "; it is hand-authored and the harness reads it from there");
+        }
     }
 
     /**

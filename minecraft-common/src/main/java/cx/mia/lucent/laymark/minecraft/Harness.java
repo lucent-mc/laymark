@@ -5,6 +5,7 @@ import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.HarnessRun;
 import cx.mia.lucent.laymark.core.plan.PlanCodec;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
+import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.ResultCodec;
 import cx.mia.lucent.laymark.core.result.RunResult;
@@ -100,13 +101,29 @@ public final class Harness {
         return new RunResult(result.runId(), result.protocolVersion(), result.scenarios(), flags);
     }
 
+    /**
+     * Resolves the hand-authored config into this launch's plan.
+     *
+     * <p>{@code config/laymark.json} is the single source of what a run measures; the runner reads
+     * the same file, so the two sides cannot drift. The only run-shaped facts the config cannot
+     * carry — which run this is and where its results go — arrive as system properties on the
+     * command line the runner assembled.
+     */
     private static RunPlan readPlan() {
-        Path path = Minecraft.getInstance().gameDirectory.toPath().resolve(Laymark.PLAN_PATH);
+        Path path = Minecraft.getInstance().gameDirectory.toPath().resolve(Laymark.CONFIG_PATH);
         if (!Files.isRegularFile(path)) {
-            throw new HarnessException("no plan at " + path);
+            throw new HarnessException("no scenario config at " + path);
+        }
+        String runId = System.getProperty(Laymark.PROPERTY_RUN_ID);
+        String output = System.getProperty(Laymark.PROPERTY_OUTPUT);
+        if (runId == null || output == null) {
+            throw new HarnessException(
+                    "launched without " + Laymark.PROPERTY_RUN_ID + " and " + Laymark.PROPERTY_OUTPUT
+                            + "; the game was not started by the runner");
         }
         try {
-            return PlanCodec.read(Files.readString(path, StandardCharsets.UTF_8));
+            return ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8))
+                    .resolve(runId, output);
         } catch (IOException e) {
             throw new UncheckedIOException("could not read " + path, e);
         }

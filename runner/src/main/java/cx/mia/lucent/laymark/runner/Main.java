@@ -1,16 +1,9 @@
 package cx.mia.lucent.laymark.runner;
 
 import cx.mia.lucent.laymark.core.Laymark;
-import cx.mia.lucent.laymark.core.harness.Pose;
-import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
-import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
 import cx.mia.lucent.laymark.core.scenario.ScenarioConfig;
-import cx.mia.lucent.laymark.core.scenario.PresetRef;
-import cx.mia.lucent.laymark.core.scenario.ScenarioDefinition;
-import cx.mia.lucent.laymark.core.scenario.StopSpec;
-import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.runner.launch.LaunchException;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
@@ -40,9 +33,6 @@ public final class Main {
     private static final DateTimeFormatter RUN_ID =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
-    /** Above any terrain vanilla generates, so the pose does not depend on the seed's landscape. */
-    private static final double OBSERVATION_ALTITUDE = 200;
-
     public static void main(String[] args) {
         Map<String, String> options = parse(args);
 
@@ -67,14 +57,15 @@ public final class Main {
 
             String runId = LocalDateTime.now().format(RUN_ID);
             // Absolute, always. The harness reads this path from inside the game process, whose
-            // working directory is the instance -- a relative path would write results into the
-            // modpack.
+            // working directory is the instance -- a relative path would resolve somewhere else.
             Path outputDirectory =
-                    Path.of(options.getOrDefault("out", "benchmark-results"))
+                    (options.containsKey("out")
+                                    ? Path.of(options.get("out"))
+                                    : instance.gameDirectory().resolve(Laymark.WORK_DIR))
                             .resolve(runId)
                             .toAbsolutePath();
 
-            RunPlan plan = plan(runId, outputDirectory, options);
+            RunPlan plan = plan(instance, runId, outputDirectory);
 
             RunControl control = new RunControl();
             ExperimentListener listener = ExperimentListener.none();
@@ -97,7 +88,7 @@ public final class Main {
                         instance,
                         plan,
                         outputDirectory,
-                        sceneRoot(options),
+                        sceneRoot(instance),
                         options,
                         control,
                         listener,
@@ -116,7 +107,7 @@ public final class Main {
                             instance,
                             plan,
                             outputDirectory,
-                            sceneRoot(options),
+                            sceneRoot(instance),
                             timeout(options, plan),
                             control,
                             listener);
@@ -171,8 +162,12 @@ public final class Main {
         try {
             String runId = LocalDateTime.now().format(RUN_ID);
             Path outputDirectory =
-                    Path.of("benchmark-results").resolve(runId).toAbsolutePath();
-            RunPlan plan = readConfig(choice.config()).resolve(runId, outputDirectory.toString());
+                    choice.instance()
+                            .gameDirectory()
+                            .resolve(Laymark.WORK_DIR)
+                            .resolve(runId)
+                            .toAbsolutePath();
+            RunPlan plan = plan(choice.instance(), runId, outputDirectory);
 
             // The roster says it outright: baseline mods load in every arm, candidates load only in
             // their own, and anything installed but named neither is withheld for the whole run.
@@ -215,7 +210,7 @@ public final class Main {
                     // every arm enable mods it does not own, which materialisation rejects.
                     choice.participants(),
                     outputDirectory,
-                    choice.config().toAbsolutePath().getParent(),
+                    sceneRoot(choice.instance()),
                     // From the plan, not a constant. A fixed ceiling shorter than the captures it
                     // contains kills the game part-way and reports the result as a hang.
                     plan.timeout(),
@@ -229,21 +224,23 @@ public final class Main {
     }
 
     /**
-     * Resolves the scenarios to run into a plan.
+     * Resolves the instance's own config into this run's plan.
      *
-     * <p>A {@code --config} file is the real path; the flags below build an equivalent one-scenario
-     * config when none is given, so a quick invocation stays a quick invocation. Either way the
-     * plan is produced by the same resolution, so what a flag means and what a config field means
-     * cannot drift apart.
+     * <p>{@code config/laymark.json} <em>is</em> the plan: hand-authored, the single source of
+     * what a run measures, and read by runner and harness alike so the two sides cannot drift.
+     * There is no other place scenarios come from — no flag-built scenario, no browsed file —
+     * because a second source is a second thing the archived result could disagree with.
      *
      * <p>Laymark ships no scenarios of its own. What to measure is the operator's decision.
      */
-    private static RunPlan plan(String runId, Path outputDirectory, Map<String, String> options) {
-        ScenarioConfig config =
-                options.containsKey("config")
-                        ? readConfig(Path.of(options.get("config")))
-                        : configFromFlags(options);
-        return config.resolve(runId, outputDirectory.toString());
+    private static RunPlan plan(ModrinthInstance instance, String runId, Path outputDirectory) {
+        return readConfig(instance.gameDirectory().resolve(Laymark.CONFIG_PATH))
+                .resolve(runId, outputDirectory.toString());
+    }
+
+    /** Scene paths in the config resolve relative to the config's own directory. */
+    private static Path sceneRoot(ModrinthInstance instance) {
+        return instance.gameDirectory().resolve(Laymark.CONFIG_PATH).toAbsolutePath().getParent();
     }
 
     /**
@@ -341,54 +338,17 @@ public final class Main {
                 : Duration.ofSeconds(Long.parseLong(requested));
     }
 
-    /** Scene paths are relative to the config that declared them, or to the working directory. */
-    private static Path sceneRoot(Map<String, String> options) {
-        Path config = options.containsKey("config") ? Path.of(options.get("config")) : null;
-        Path parent = config == null ? null : config.toAbsolutePath().getParent();
-        return parent == null ? Path.of("").toAbsolutePath() : parent;
-    }
-
     private static ScenarioConfig readConfig(Path path) {
         if (!Files.isRegularFile(path)) {
-            throw new LaunchException("no scenario config at " + path);
+            throw new LaunchException(
+                    "no scenario config at " + path + "; it is hand-authored -- write your"
+                            + " scenarios there");
         }
         try {
             return ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new UncheckedIOException("could not read " + path, e);
         }
-    }
-
-    /** The one-scenario shape the flags describe. */
-    private static ScenarioConfig configFromFlags(Map<String, String> options) {
-        int renderDistance = Integer.parseInt(options.getOrDefault("render-distance", "12"));
-        Preset defaults = Preset.defaults();
-        Preset preset =
-                new Preset(
-                        renderDistance,
-                        renderDistance,
-                        defaults.particles(),
-                        defaults.clouds(),
-                        defaults.entityShadows(),
-                        defaults.biomeBlendRadius(),
-                        defaults.fieldOfView());
-
-        long captureMillis =
-                Duration.ofSeconds(Long.parseLong(options.getOrDefault("duration", "30")))
-                        .toMillis();
-
-        return ScenarioConfig.of(
-                new ScenarioDefinition(
-                        "resident-render",
-                        List.of(),
-                        List.of(Phase.RESIDENT_RENDER),
-                        StopSpec.of(StopCondition.Kind.TIME, captureMillis, 0),
-                        Integer.parseInt(options.getOrDefault("repetitions", "1")),
-                        PresetRef.inline(preset),
-                        Pose.lookingDown(0.5, OBSERVATION_ALTITUDE, 0.5),
-                        Long.parseLong(options.getOrDefault("seed", "1")),
-                        false,
-                        List.of()));
     }
 
     private static String required(Map<String, String> options, String name) {
@@ -424,18 +384,17 @@ public final class Main {
                 """
                 laymark runner (protocol v%d)
 
-                Runs one scenario in a disposable world and reports its frame-time distribution.
+                Runs the instance's scenario config and reports what it measured.
 
-                  --config <path>         scenario config to run; without it the flags below
-                          describe a single resident-render scenario
-  --profile <name>        Modrinth App profile directory name (required)
+                Scenarios come from one place: <instance>/config/laymark.json, hand-authored.
+                Results and working state go to <instance>/.laymark/.
+
+                With no arguments at all, opens the planning window.
+
+                  --profile <name>        Modrinth App profile directory name (required)
                   --version <id>          version id, e.g. 26.1.2-26.1.2.95 (required)
                   --root <path>           Modrinth App data directory (default: platform location)
-                  --out <path>            results root (default: benchmark-results)
-                  --seed <n>              world seed (default 1)
-                  --duration <seconds>    capture window (default 30)
-                  --repetitions <n>       repeats, each in a fresh world (default 1)
-                  --render-distance <n>   chunks, also used as simulation distance (default 12)
+                  --out <path>            results root (default: <instance>/.laymark)
                   --timeout <seconds>     how long to wait for the run; by default derived from
                           the scenarios' own stop timeouts plus a launch allowance
   --gui                   open a window with status, schedule, and pause/stop

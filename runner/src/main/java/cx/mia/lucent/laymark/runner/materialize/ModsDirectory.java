@@ -36,7 +36,10 @@ public final class ModsDirectory {
 
     public ModsDirectory(Path instanceRoot) {
         this.mods = instanceRoot.resolve("mods");
-        this.withheld = instanceRoot.resolve("laymark").resolve("withheld");
+        this.withheld =
+                instanceRoot
+                        .resolve(cx.mia.lucent.laymark.core.Laymark.WORK_DIR)
+                        .resolve("withheld");
     }
 
     /**

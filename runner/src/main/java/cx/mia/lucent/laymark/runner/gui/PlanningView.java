@@ -1,6 +1,8 @@
 package cx.mia.lucent.laymark.runner.gui;
 
+import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.experiment.Schedule;
+import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
 import cx.mia.lucent.laymark.core.select.DependencyGraph;
 import cx.mia.lucent.laymark.runner.select.JarProbe;
 import cx.mia.lucent.laymark.runner.launch.InstalledVersion;
@@ -12,6 +14,7 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -27,7 +30,6 @@ import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
-import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
@@ -59,7 +61,6 @@ public final class PlanningView extends JPanel {
             ModrinthInstance instance,
             Set<String> baseline,
             Set<String> candidates,
-            Path config,
             Schedule schedule) {
 
         /**
@@ -83,7 +84,7 @@ public final class PlanningView extends JPanel {
 
     private final JComboBox<String> profiles = new JComboBox<>();
     private final JComboBox<String> versions = new JComboBox<>();
-    private final JTextField config = new JTextField(38);
+    private final JLabel configStatus = Theme.muted("—");
     private final JTextField schedule =
             new JTextField(PREFERENCES.get(SCHEDULE_KEY, DEFAULT_SCHEDULE), 16);
 
@@ -144,6 +145,7 @@ public final class PlanningView extends JPanel {
         profiles.addActionListener(
                 unused -> {
                     recallVersion();
+                    refreshConfigStatus();
                     reloadMods();
                 });
         for (String profile : directories(root.resolve("profiles"))) {
@@ -158,6 +160,7 @@ public final class PlanningView extends JPanel {
         }
         versions.addActionListener(unused -> rememberVersion());
         recallVersion();
+        refreshConfigStatus();
         reloadMods();
     }
 
@@ -172,12 +175,9 @@ public final class PlanningView extends JPanel {
         top.add(Theme.muted("version"));
         top.add(versions);
 
-        JButton browse = Theme.button("Browse", false);
-        browse.addActionListener(unused -> browseForConfig());
         JPanel middle = row();
         middle.add(Theme.muted("scenarios"));
-        middle.add(config);
-        middle.add(browse);
+        middle.add(configStatus);
 
         JPanel bottom = row();
         bottom.add(Theme.muted("schedule"));
@@ -197,18 +197,38 @@ public final class PlanningView extends JPanel {
     }
 
     /**
-     * What each scenario measures — pose, preset, phases, stop condition — comes from this file.
+     * Reads the instance's own config and says what it holds.
      *
-     * <p>Laymark ships none. What is worth measuring is a property of the pack and of whoever is
-     * tuning it, and a benchmark that invents its own scenarios measures its own opinion.
+     * <p>Not a file picker. {@code config/laymark.json} is the single source of what a run measures
+     * — the harness reads it from inside the game — so the planner reports on it rather than
+     * offering to point somewhere the harness will not look. Laymark ships no scenarios; what is
+     * worth measuring is a property of the pack and of whoever is tuning it.
      */
-    private void browseForConfig() {
-        JFileChooser chooser = new JFileChooser(config.getText().isBlank() ? "." : config.getText());
-        chooser.setDialogTitle("Scenario config");
-        chooser.setFileFilter(
-                new javax.swing.filechooser.FileNameExtensionFilter("Scenario config (*.json)", "json"));
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            config.setText(chooser.getSelectedFile().getAbsolutePath());
+    private void refreshConfigStatus() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            configStatus.setText("—");
+            return;
+        }
+        Path path = configPath();
+        if (!Files.isRegularFile(path)) {
+            configStatus.setForeground(Theme.BAD);
+            configStatus.setText(Laymark.CONFIG_PATH + " is missing — write your scenarios there");
+            return;
+        }
+        try {
+            var scenarios =
+                    ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8)).scenarios();
+            configStatus.setForeground(Theme.MUTED);
+            configStatus.setText(
+                    Laymark.CONFIG_PATH + "  ·  " + scenarios.size() + " scenario(s): "
+                            + scenarios.stream()
+                                    .map(scenario -> scenario.id())
+                                    .reduce((a, b) -> a + ", " + b)
+                                    .orElse(""));
+        } catch (RuntimeException | java.io.IOException e) {
+            configStatus.setForeground(Theme.BAD);
+            configStatus.setText(Laymark.CONFIG_PATH + " does not parse: " + e.getMessage());
         }
     }
 
@@ -760,7 +780,6 @@ public final class PlanningView extends JPanel {
                 new ModrinthInstance(root, profile, version),
                 baseline,
                 named(Role.CANDIDATE),
-                configPath(),
                 parsed);
     }
 
@@ -770,8 +789,12 @@ public final class PlanningView extends JPanel {
                 (Integer) baselineInterval.getValue());
     }
 
+    /** The selected profile's own config; the only place scenarios come from. */
     private Path configPath() {
-        return Path.of(config.getText().trim());
+        String profile = (String) profiles.getSelectedItem();
+        return root.resolve("profiles")
+                .resolve(profile == null ? "" : profile)
+                .resolve(Laymark.CONFIG_PATH);
     }
 
     /** Why {@link #choice()} returned nothing, phrased for whoever is looking at the form. */
@@ -788,12 +811,10 @@ public final class PlanningView extends JPanel {
                     + " database, so it will not guess — and the wrong guess launches the wrong"
                     + " game. It is remembered after the first time.";
         }
-        if (config.getText().isBlank()) {
-            return "Choose a scenario config. It is what says what to measure — where to stand,"
-                    + " which phases, and when to stop — and Laymark ships none of its own.";
-        }
         if (!Files.isRegularFile(configPath())) {
-            return "No scenario config at " + configPath() + ".";
+            return "No scenario config at " + configPath() + ". It is hand-authored and says what"
+                    + " to measure — where to stand, which phases, when to stop. Laymark ships"
+                    + " none of its own.";
         }
         try {
             schedule();
