@@ -37,7 +37,7 @@ These ship today and produce incorrect behaviour. They come first.
 | §6.2 | `framerateLimit` and `vsync` are configurable on `Preset`; the spec makes them non-configurable overrides. |
 | §9 | **Contamination tiers inverted.** A preset reverted mid-run, and the throttle firing mid-capture, are flags; the spec hard-fails both. Readback happens once, not as a runtime invariant during a capture. |
 | §6.3, §13 | **Completion-target scenarios are scored on the frame-interval mean** — precisely the quantity the spec says is not comparable across unequal windows. `millisPerChunkReceived` exists and is unused. |
-| §7 | **World reuse never happens.** `dependsOn` affects ordering only; every repetition gets a fresh world and discards it, so a dependent scenario measures something other than its config describes. |
+| §7 | ~~**World reuse never happens.** `dependsOn` affects ordering only; every repetition gets a fresh world and discards it, so a dependent scenario measures something other than its config describes.~~ Fixed: a dependent scenario reopens its dependency's save, and a save survives until every scenario downstream of it has run. |
 | §5.3 | `Materialization.verify` compares names, not hashes. A jar swapped under the same name passes. |
 | §10 | Report renders `0,8%` — `String.format` without a `Locale`. |
 
@@ -85,7 +85,9 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
 ### 13 — Precondition machinery and content
 - §6.1, §7 Chunky: generation trigger, `GenerationProgressEvent.complete()` as the barrier,
   independent sample-verification of the footprint. Zero references today.
-- §6.1 Phase 3's positive precondition — chunks verified on disk.
+- §6.1 ~~Phase 3's positive precondition — chunks verified on disk.~~ Done: world reuse made it
+  answerable without Chunky, since the terrain comes from the scenario depended on. Chunky is still
+  what a *standalone* streaming scenario would need.
 - §7 The default scenario set, which the spec requires Laymark to ship: chunk generation, and
   entity culling with occluders inside the pen.
 - §7 Verify placement against a real `.schem`.
@@ -103,6 +105,8 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
 ### 15 — Shipping
 - §3 Embed the runner in the mod jar as an inert resource, not under `META-INF/jarjar/`.
 - §5.3 Extract `laymark-runner-<version>.jar` to the instance root on first launch; never delete it.
+- §5.1 Sweep leaked `laymark-*` saves at startup — a run killed mid-schedule leaves the world its
+  dependents were still holding a lease on.
 - §5.1 Pin heap and GC flags, which is the reason for launching directly at all.
 - §5.4 Emit heartbeats and add an idle timeout; a hung harness currently consumes the full run
   timeout.

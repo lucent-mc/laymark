@@ -30,14 +30,18 @@ public record WorldSpec(String levelId, long seed, boolean generateStructures) {
     }
 
     /**
-     * The save for one repetition of one scenario.
+     * The save for one repetition, named after the scenario that <em>creates</em> it.
      *
-     * <p>Every repetition gets its own save because two phases have a negative precondition —
-     * the region must never have been generated — and measuring them destroys it.
+     * <p>Not after the scenario using it. A scenario that declares {@code dependsOn} runs in the
+     * world its dependency generated — that is what the dependency means — so the name has to
+     * belong to the one that made it, and every user of that world resolves to the same name.
+     *
+     * <p>Independent scenarios still get a save each per repetition, because two phases have a
+     * negative precondition that measuring destroys.
      */
-    public static WorldSpec forRepetition(String runId, String scenarioId, int repetition, long seed) {
+    public static WorldSpec forRepetition(String runId, String ownerId, int repetition, long seed) {
         return new WorldSpec(
-                sanitize("laymark-" + runId + "-" + scenarioId + "-" + repetition), seed, false);
+                sanitize("laymark-" + runId + "-" + ownerId + "-" + repetition), seed, false);
     }
 
     /** Dots are dropped rather than kept: a generated id never needs one, and "." and ".." do. */

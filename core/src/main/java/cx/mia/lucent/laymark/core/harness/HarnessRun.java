@@ -58,22 +58,30 @@ public final class HarnessRun {
      * already succeeded and biases whatever is left toward the arms that had no trouble.
      */
     public RunResult execute() {
+        List<ScenarioSpec> order = plan.executionOrder();
+        WorldLeases leases = WorldLeases.of(order);
         List<ScenarioResult> results = new ArrayList<>();
-        for (ScenarioSpec scenario : plan.executionOrder()) {
+
+        for (ScenarioSpec scenario : order) {
             for (int repetition = 1; repetition <= scenario.repetitions(); repetition++) {
-                results.add(runRepetition(scenario, repetition));
+                results.add(runRepetition(scenario, repetition, leases));
             }
         }
         return new RunResult(plan.runId(), Laymark.PROTOCOL_VERSION, results, runFlags);
     }
 
-    private ScenarioResult runRepetition(ScenarioSpec scenario, int repetition) {
+    private ScenarioResult runRepetition(
+            ScenarioSpec scenario, int repetition, WorldLeases leases) {
+
         events.accept(new Frame.ScenarioStarted(scenario.id(), repetition));
+        String owner = leases.ownerOf(scenario.id());
         WorldSpec world =
-                WorldSpec.forRepetition(plan.runId(), scenario.id(), repetition, scenario.seed());
+                WorldSpec.forRepetition(plan.runId(), owner, repetition, scenario.seed());
+        boolean owns = owner.equals(scenario.id());
         long startedAt = System.nanoTime();
+
         try {
-            ScenarioResult result = measure(scenario, repetition, world, startedAt);
+            ScenarioResult result = measure(scenario, repetition, world, owns, startedAt);
             events.accept(
                     new Frame.ScenarioFinished(
                             scenario.id(),
@@ -84,14 +92,22 @@ public final class HarnessRun {
             events.accept(new Frame.ScenarioFinished(scenario.id(), false, e.getMessage()));
             return ScenarioResult.failed(scenario.id(), repetition, e.getMessage());
         } finally {
-            // Unconditional. A save left behind holds a lock that stops the next repetition from
-            // creating its own, so a single failure would cascade into every later scenario.
-            discard(world);
+            // The world always closes; whether it is deleted depends on who still needs it. A save
+            // left open holds a lock that stops the next scenario from opening anything, so a
+            // single failure would otherwise cascade through the rest of the run.
+            close();
+            if (leases.release(scenario.id(), repetition)) {
+                discard(world);
+            }
         }
     }
 
     private ScenarioResult measure(
-            ScenarioSpec scenario, int repetition, WorldSpec world, long startedAt) {
+            ScenarioSpec scenario,
+            int repetition,
+            WorldSpec world,
+            boolean createsWorld,
+            long startedAt) {
         List<PhaseResult> segments = new ArrayList<>();
 
         // Settings first. Render distance decides how much work world load itself does, so
@@ -102,6 +118,13 @@ public final class HarnessRun {
         // cost mods target is the creation itself, and a window opened once the world exists has
         // already missed it. Its end is the barrier, not a target anyone configures.
         boolean measuringSpawn = scenario.measure().contains(Phase.SPAWN_GENERATION);
+        if (measuringSpawn && !createsWorld) {
+            // Spawn generation is world creation. A scenario reusing a world has none to measure,
+            // and capturing the reopen instead would report a load as a generation.
+            throw new HarnessException(
+                    "scenario " + scenario.id() + " measures spawn generation but reuses "
+                            + world.levelId() + ", which is already generated");
+        }
         long spawnStartedAt = System.nanoTime();
         if (measuringSpawn) {
             events.accept(
@@ -109,7 +132,11 @@ public final class HarnessRun {
             port.beginCapture();
         }
 
-        port.createWorld(world);
+        if (createsWorld) {
+            port.createWorld(world);
+        } else {
+            port.openWorld(world);
+        }
         BarrierReport barrier = port.awaitReady(READY_TIMEOUT);
         port.pinGameRules();
 
@@ -205,25 +232,33 @@ public final class HarnessRun {
     /** The phases that measure a settled state, where positioning is setup rather than the event. */
     private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
         port.position(scenario.pose());
-        requireNegativePrecondition(scenario, phase);
+        requirePreconditions(scenario, phase);
         events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
         return port.capture(scenario.stopCondition());
     }
 
     /**
-     * Fails the repetition if the work being measured has already happened.
+     * Fails the repetition unless the phase is measuring what it claims to.
      *
-     * <p>Two of the four phases have this hazard, and it is the most dangerous failure mode in the
-     * whole harness: a traversal whose target was already generated, or a streaming phase whose
-     * sections are already meshed, <strong>completes normally and reports flatteringly good
-     * numbers</strong>. There is nothing in the output to distinguish it from a genuinely fast
-     * stack, so it fails the repetition rather than flagging it.
+     * <p>Two of the four phases carry the most dangerous failure mode in the harness: a traversal
+     * whose target was already generated, or a streaming phase whose sections are already meshed,
+     * <strong>completes normally and reports flatteringly good numbers</strong>. Nothing in the
+     * output distinguishes that from a genuinely fast stack, so it fails rather than flags.
      */
-    private void requireNegativePrecondition(ScenarioSpec scenario, Phase phase) {
+    private void requirePreconditions(ScenarioSpec scenario, Phase phase) {
         switch (phase) {
             // Traversal checks its own, before the player moves -- see traverse().
             case UNGENERATED_TRAVERSAL -> {}
             case GENERATED_STREAMING -> {
+                // Positive: the terrain must already exist, or this times generation and calls it
+                // streaming -- the same number under the wrong name, and far the larger one.
+                if (port.targetIsUngenerated(scenario.pose())) {
+                    throw new HarnessException(
+                            "scenario " + scenario.id()
+                                    + " measures streaming from disk, but its target has never been"
+                                    + " generated; it needs dependsOn a scenario that generates it");
+                }
+                // Negative: the client must not already hold the meshes.
                 if (!port.targetHasNoBuiltSections(scenario.pose())) {
                     throw new HarnessException(
                             "scenario " + scenario.id()
@@ -231,9 +266,9 @@ public final class HarnessRun {
                                     + " meshed; the work it exists to time has already happened");
                 }
             }
-            // Spawn generation is guaranteed fresh by construction -- every repetition creates its
-            // own save -- and resident render is the one phase where "already finished" is the
-            // point rather than a hazard.
+            // Spawn generation is guaranteed fresh by construction -- a scenario measuring it
+            // creates its own save -- and resident render is the one phase where "already
+            // finished" is the point rather than a hazard.
             case SPAWN_GENERATION, RESIDENT_RENDER -> {}
         }
     }
@@ -310,9 +345,16 @@ public final class HarnessRun {
         return scenario.stopCondition();
     }
 
-    private void discard(WorldSpec world) {
+    private void close() {
         try {
             port.closeWorld();
+        } catch (RuntimeException e) {
+            runFlags.add("could not close the world: " + e.getMessage());
+        }
+    }
+
+    private void discard(WorldSpec world) {
+        try {
             port.deleteWorld(world.levelId());
         } catch (RuntimeException e) {
             // Cleanup failure must not replace the real outcome -- losing the exception that

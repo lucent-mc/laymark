@@ -133,6 +133,27 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 });
     }
 
+    @Override
+    public void openWorld(WorldSpec spec) {
+        ClientThread.call(
+                "opening the world",
+                Duration.ofMinutes(10),
+                () -> {
+                    Minecraft minecraft = Minecraft.getInstance();
+                    currentLevelId = spec.levelId();
+
+                    if (!minecraft.getLevelSource().levelExists(spec.levelId())) {
+                        // The scenario this one depends on was supposed to leave this behind.
+                        // Continuing would generate the terrain here and time it as streaming.
+                        throw new HarnessException(
+                                "save " + spec.levelId() + " is not there; the scenario that"
+                                        + " generates it did not complete");
+                    }
+                    minecraft.createWorldOpenFlows().openWorld(spec.levelId(), () -> {});
+                    return null;
+                });
+    }
+
     /**
      * Polls the composite barrier, timing each condition separately.
      *
