@@ -141,12 +141,15 @@ Verified end to end with the full modded pack, through world creation and entry.
 
 ```text
 <instance>/
+  laymark-runner-<version>.jar   the runner itself, double-clickable
   mods/              participants only: the baseline floor and all candidates
   laymark/
-    runner-<version>.jar
     withheld/        mods not participating in this run
   config/laymark/    run manifest (the only in-instance path a launcher's file watcher ignores)
 ```
+
+The runner sits at the **instance root**, not inside `laymark/`. It is the file someone opens, and
+the first place they look for it is the folder they already have open.
 
 - Candidates toggle by rename, `foo.jar` ↔ `foo.jar.disabled`, the convention launchers already use.
 - Non-participants move to `laymark/withheld/` at the start and are restored at the end.

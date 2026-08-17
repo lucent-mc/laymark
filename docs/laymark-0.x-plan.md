@@ -102,8 +102,7 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
 
 ### 15 — Shipping
 - §3 Embed the runner in the mod jar as an inert resource, not under `META-INF/jarjar/`.
-- §5.3 Extract `runner-<version>.jar` into `laymark/` on first launch; never delete it.
-- §3 Shade the runner jar so `java -jar` works; it currently is not self-contained.
+- §5.3 Extract `laymark-runner-<version>.jar` to the instance root on first launch; never delete it.
 - §5.1 Pin heap and GC flags, which is the reason for launching directly at all.
 - §5.4 Emit heartbeats and add an idle timeout; a hung harness currently consumes the full run
   timeout.
