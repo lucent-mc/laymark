@@ -334,6 +334,45 @@ public final class MinecraftHarnessPort implements HarnessPort {
     /** A region file covers a 32x32 square of chunks. */
     private static final int REGION_CHUNKS = 32;
 
+    @Override
+    public String pregenerationUnavailableReason() {
+        try {
+            return ChunkyBridge.unavailableReason();
+        } catch (LinkageError e) {
+            return "Chunky is not installed";
+        }
+    }
+
+    @Override
+    public void pregenerate(Pose around, int viewDistance, Duration timeout) {
+        // Two extra chunks of margin over the send disc's own +2 neighbour allowance, converted
+        // to blocks: generation off the measured path is cheap, an under-covered footprint turns
+        // the capture into part-generation.
+        int radiusBlocks = (viewDistance + 4) * 16;
+        ChunkyBridge.pregenerate(around.x(), around.z(), radiusBlocks, timeout);
+
+        // Independent verification, not trust: Chunky said complete and the save was forced, so
+        // the region files for the footprint must exist. Sampled at the centre and the four
+        // corners of the disc's bounding square.
+        int radiusChunks = viewDistance + 2;
+        for (int[] offset :
+                new int[][] {{0, 0}, {radiusChunks, radiusChunks}, {radiusChunks, -radiusChunks},
+                        {-radiusChunks, radiusChunks}, {-radiusChunks, -radiusChunks}}) {
+            Pose sample =
+                    new Pose(
+                            around.x() + offset[0] * 16.0,
+                            around.y(),
+                            around.z() + offset[1] * 16.0,
+                            0f,
+                            Pose.LOOKING_DOWN);
+            if (targetIsUngenerated(sample)) {
+                throw new HarnessException(
+                        "pre-generation completed but the footprint is not on disk at chunk offset"
+                                + " (" + offset[0] + ", " + offset[1] + ")");
+            }
+        }
+    }
+
     /**
      * Whether the client holds no compiled mesh for the target.
      *

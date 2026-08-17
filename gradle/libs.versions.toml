@@ -31,6 +31,10 @@ flatlaf = "3.6"
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
 spark-api = { module = "me.lucko:spark-api", version.ref = "sparkApi" }
+# The whole mod jar off Modrinth's maven, compileOnly: Chunky publishes no separate API artifact,
+# and the eight ChunkyAPI methods plus two event records are the documented, version()-gated
+# surface (see docs/spark-chunky-control-surfaces-research.md).
+chunky = { module = "maven.modrinth:chunky", version.ref = "chunky" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

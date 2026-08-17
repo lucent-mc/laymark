@@ -97,6 +97,20 @@ class FailureInjectionTest {
             }
         }
 
+        String pregenerationUnavailable = "Chunky is not installed";
+        boolean pregenerated = false;
+
+        @Override
+        public String pregenerationUnavailableReason() {
+            return pregenerationUnavailable;
+        }
+
+        @Override
+        public void pregenerate(Pose around, int viewDistance, Duration timeout) {
+            pregenerated = true;
+            targetGenerated = true;
+        }
+
         @Override
         public boolean targetIsUngenerated(Pose pose) {
             return !targetGenerated;
@@ -182,6 +196,32 @@ class FailureInjectionTest {
         var scenario = only(result, "load");
         assertEquals(ScenarioResult.Outcome.FAILED, scenario.outcome());
         assertTrue(scenario.failureReason().contains("never been generated"));
+    }
+
+    @Test
+    void standaloneStreamingPregeneratesWhenChunkyIsAvailable() {
+        FakePort port = new FakePort();
+        port.targetGenerated = false;
+        port.pregenerationUnavailable = null;
+        var result = run(port, scenario("load", List.of(), Phase.GENERATED_STREAMING));
+        assertTrue(port.pregenerated);
+        assertEquals(ScenarioResult.Outcome.COMPLETED, only(result, "load").outcome());
+    }
+
+    @Test
+    void aFailedDependencyIsNotPaperedOverByPregeneration() {
+        FakePort port = new FakePort();
+        port.failCapture = true;
+        port.pregenerationUnavailable = null;
+        var result =
+                run(
+                        port,
+                        scenario("gen", List.of(), Phase.UNGENERATED_TRAVERSAL),
+                        scenario("load", List.of("gen"), Phase.GENERATED_STREAMING));
+        // The dependent fails fast; Chunky being available must not silently rebuild the world
+        // the dependency was supposed to produce, because the scenario's claim is "in that world".
+        assertEquals(ScenarioResult.Outcome.FAILED, only(result, "load").outcome());
+        assertTrue(only(result, "load").failureReason().contains("did not complete"));
     }
 
     @Test
