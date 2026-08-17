@@ -108,18 +108,33 @@ public final class HarnessRun {
 
         events.accept(
                 new Frame.PhaseEntered(scenario.id(), Phase.RESIDENT_RENDER, System.nanoTime()));
-        List<FrameSample> samples = port.capture(captureWindow(scenario));
-        if (samples.isEmpty()) {
+        Measurement measurement = port.capture(captureWindow(scenario));
+        if (!measurement.measured()) {
             throw new HarnessException("scenario " + scenario.id() + " captured no frames");
         }
+        flags.addAll(throttleFlags(measurement));
 
         return ScenarioResult.completed(
                 scenario.id(),
                 repetition,
                 readback,
                 flags,
-                samples,
+                measurement,
                 Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
+    }
+
+    /**
+     * Throttling seen during the window, as flags rather than a failure.
+     *
+     * <p>The port already fails a capture that was throttled throughout. This catches the subtler
+     * case — a cap that engaged for part of it — where the samples are real but the distribution
+     * has a ceiling in the middle of it, and only the reader can judge what that is worth.
+     */
+    private static List<String> throttleFlags(Measurement measurement) {
+        return measurement.throttlesObserved().stream()
+                .filter(throttle -> throttle != Throttle.NONE)
+                .map(throttle -> "framerate was throttled during the capture: " + throttle)
+                .toList();
     }
 
     private static Duration captureWindow(ScenarioSpec scenario) {

@@ -15,7 +15,7 @@ class MeasurementTypesTest {
     private static List<FrameSample> samples(long... millis) {
         List<FrameSample> samples = new ArrayList<>();
         for (int i = 0; i < millis.length; i++) {
-            samples.add(new FrameSample(i * 1_000_000L, millis[i] * 1_000_000L));
+            samples.add(FrameSample.interval(i * 1_000_000L, millis[i] * 1_000_000L));
         }
         return samples;
     }
@@ -55,8 +55,8 @@ class MeasurementTypesTest {
     /** A frame that took no time is a broken timer, not a fast frame. */
     @Test
     void rejectsImpossibleFrames() {
-        assertThrows(HarnessException.class, () -> new FrameSample(0, 0));
-        assertThrows(HarnessException.class, () -> new FrameSample(-1, 1000));
+        assertThrows(HarnessException.class, () -> FrameSample.interval(0, 0));
+        assertThrows(HarnessException.class, () -> FrameSample.interval(-1, 1000));
     }
 
     /** Vanilla substitutes its default for an unacceptable value; clamping here would hide that. */

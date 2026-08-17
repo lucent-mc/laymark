@@ -1,38 +1,68 @@
 package cx.mia.lucent.laymark.neoforge;
 
-import cx.mia.lucent.laymark.minecraft.FrameRecorder;
+import cx.mia.lucent.laymark.minecraft.ClientChannels;
 import cx.mia.lucent.laymark.minecraft.Harness;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientResourceLoadFinishedEvent;
 import net.neoforged.neoforge.client.event.FlipFrameEvent;
+import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
- * The two things a loader has to provide: when the run may start, and when a frame happened.
+ * The trigger points a loader has to provide, and nothing else.
  *
- * <p>Nothing else belongs here. What to measure lives in {@code core} and how to make the game do
- * it lives in {@code minecraft-common}; this file exists because neither of those may name
- * NeoForge.
+ * <p>What to measure lives in {@code core} and how to make the game do it lives in
+ * {@code minecraft-common}; this file exists only because neither of those may name NeoForge. It
+ * forwards to {@link ClientChannels} rather than to individual recorders so that adding a channel
+ * never means editing this file — which is how a second loader port drifts from the first, and how
+ * a channel ends up silently missing on one of them.
  */
 final class ClientHooks {
 
-    private final FrameRecorder recorder;
+    private final ClientChannels channels;
     private boolean started;
 
-    ClientHooks(FrameRecorder recorder) {
-        this.recorder = recorder;
+    ClientHooks(ClientChannels channels) {
+        this.channels = channels;
     }
 
     /**
-     * The frame trigger.
+     * The frame boundary.
      *
      * <p>Fired at the buffer flip, which is the moment a frame becomes visible and therefore the
-     * only honest place to timestamp one. The recorder derives the interval between consecutive
-     * flips; this hook exists solely because {@code core} and {@code minecraft-common} may not
-     * name NeoForge.
+     * only honest place to timestamp one. Everything derived from it — the interval, the render
+     * call, the throttle state, the GPU query bracket — is settled here.
      */
     @SubscribeEvent
     public void onFlipFrame(FlipFrameEvent event) {
-        recorder.onFramePresented();
+        channels.onFramePresented();
+    }
+
+    @SubscribeEvent
+    public void onRenderFramePre(RenderFrameEvent.Pre event) {
+        channels.onRenderFrameStart();
+    }
+
+    @SubscribeEvent
+    public void onRenderFramePost(RenderFrameEvent.Post event) {
+        channels.onRenderFrameEnd();
+    }
+
+    /**
+     * Integrated-server tick boundaries.
+     *
+     * <p>Bracketed here rather than read from {@code MinecraftServer#getTickTimesNanos()}, which
+     * holds only the last hundred ticks — five seconds at full rate. Sampling that at the end of a
+     * long capture would describe its final sixth and present the answer as the whole.
+     */
+    @SubscribeEvent
+    public void onServerTickPre(ServerTickEvent.Pre event) {
+        channels.onServerTickStart();
+    }
+
+    @SubscribeEvent
+    public void onServerTickPost(ServerTickEvent.Post event) {
+        channels.onServerTickEnd();
     }
 
     /**
@@ -49,6 +79,6 @@ final class ClientHooks {
             return;
         }
         started = true;
-        Harness.start(recorder, LaymarkNeoForge::report);
+        Harness.start(channels, LaymarkNeoForge::report);
     }
 }

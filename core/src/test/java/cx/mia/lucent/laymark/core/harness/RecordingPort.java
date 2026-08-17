@@ -58,14 +58,31 @@ final class RecordingPort implements HarnessPort {
         lastPose = pose;
     }
 
+    /** Throttle to report on every captured frame, so the sequence's flagging can be exercised. */
+    Throttle throttle = Throttle.NONE;
+
     @Override
-    public List<FrameSample> capture(Duration duration) {
+    public Measurement capture(Duration duration) {
         record("capture");
         List<FrameSample> samples = new ArrayList<>();
+        List<GpuSample> gpu = new ArrayList<>();
+        List<TickSample> ticks = new ArrayList<>();
         for (int i = 0; i < framesPerCapture; i++) {
-            samples.add(new FrameSample(i * 8_000_000L, 8_000_000L + i));
+            samples.add(
+                    new FrameSample(i * 8_000_000L, 8_000_000L + i, 4_000_000L, 2_000_000L, throttle));
+            gpu.add(new GpuSample(i * 8_000_000L, 3_000_000L));
         }
-        return samples;
+        for (int i = 0; i < framesPerCapture / 10; i++) {
+            ticks.add(new TickSample(i * 50_000_000L, 12_000_000L));
+        }
+        return new Measurement(
+                samples,
+                gpu,
+                ticks,
+                new WorkCounters(100, 200, 300),
+                new WorkCounters(140, 260, 380),
+                new MemorySnapshot(1_000, 4_000, 5, 40),
+                new MemorySnapshot(2_000, 4_000, 9, 95));
     }
 
     @Override

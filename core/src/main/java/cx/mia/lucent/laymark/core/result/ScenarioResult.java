@@ -1,8 +1,8 @@
 package cx.mia.lucent.laymark.core.result;
 
-import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.FrameStatistics;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
+import cx.mia.lucent.laymark.core.harness.Measurement;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
 import java.util.List;
 
@@ -16,8 +16,10 @@ import java.util.List;
  * @param flags contamination the run detected but chose not to fail on — a setting a mod reverted,
  *     an environmental deviation. Present so a reader can discount a number rather than trust it
  *     blindly.
- * @param samples retained in full; the summary is derived, and derived numbers cannot be
- *     re-derived differently later if only the summary was kept
+ * @param measurement every channel, retained in full. The summaries are derived, and a derived
+ *     number cannot be re-derived differently later if only the summary was kept — which matters
+ *     because the right way to summarise a distribution is a question this project expects to keep
+ *     revisiting.
  */
 public record ScenarioResult(
         String scenarioId,
@@ -26,7 +28,7 @@ public record ScenarioResult(
         String failureReason,
         PresetReadback readback,
         List<String> flags,
-        List<FrameSample> samples,
+        Measurement measurement,
         long durationMillis) {
 
     public enum Outcome {
@@ -49,7 +51,7 @@ public record ScenarioResult(
             throw new HarnessException("failed result for " + scenarioId + " has no reason");
         }
         flags = flags == null ? List.of() : List.copyOf(flags);
-        samples = samples == null ? List.of() : List.copyOf(samples);
+        measurement = measurement == null ? Measurement.empty() : measurement;
         if (outcome == Outcome.COMPLETED_WITH_FLAGS && flags.isEmpty()) {
             throw new HarnessException("flagged result for " + scenarioId + " carries no flags");
         }
@@ -60,25 +62,36 @@ public record ScenarioResult(
             int repetition,
             PresetReadback readback,
             List<String> flags,
-            List<FrameSample> samples,
+            Measurement measurement,
             long durationMillis) {
         Outcome outcome =
                 flags == null || flags.isEmpty() ? Outcome.COMPLETED : Outcome.COMPLETED_WITH_FLAGS;
         return new ScenarioResult(
-                scenarioId, repetition, outcome, null, readback, flags, samples, durationMillis);
+                scenarioId, repetition, outcome, null, readback, flags, measurement, durationMillis);
     }
 
     public static ScenarioResult failed(String scenarioId, int repetition, String reason) {
         return new ScenarioResult(
-                scenarioId, repetition, Outcome.FAILED, reason, null, List.of(), List.of(), 0);
+                scenarioId,
+                repetition,
+                Outcome.FAILED,
+                reason,
+                null,
+                List.of(),
+                Measurement.empty(),
+                0);
     }
 
     public boolean measured() {
-        return outcome != Outcome.FAILED && !samples.isEmpty();
+        return outcome != Outcome.FAILED && measurement.measured();
     }
 
-    /** @throws HarnessException if nothing was measured */
+    /**
+     * The scored distribution.
+     *
+     * @throws HarnessException if nothing was measured
+     */
     public FrameStatistics statistics() {
-        return FrameStatistics.of(samples);
+        return measurement.frameStatistics();
     }
 }

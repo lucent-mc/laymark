@@ -1,15 +1,16 @@
 package cx.mia.lucent.laymark.core.harness;
 
 import java.util.List;
+import java.util.function.ToLongFunction;
 
 /**
- * A frame-time distribution reduced to the numbers a report quotes.
+ * A timing distribution reduced to the numbers a report quotes.
  *
  * <p>Percentiles are of frame <em>duration</em>, so higher is worse throughout — including p999,
  * which is the stutter measure and the reason raw samples are retained rather than accumulated
  * into a running mean.
  *
- * @param count how many frames the window contained; a percentile from few samples is noisy, so
+ * @param count how many samples the window contained; a percentile from few samples is noisy, so
  *     the count travels with the summary rather than being discarded
  */
 public record FrameStatistics(
@@ -22,11 +23,25 @@ public record FrameStatistics(
         double minMillis,
         double maxMillis) {
 
+    /** Summarises the headline channel. */
     public static FrameStatistics of(List<FrameSample> samples) {
+        return of(samples, TimingChannel.INTERVAL);
+    }
+
+    public static FrameStatistics of(List<FrameSample> samples, TimingChannel channel) {
+        return from(samples, sample -> sample.nanos(channel));
+    }
+
+    /**
+     * @param nanos how to read the quantity being summarised, so the same reduction serves frame
+     *     channels, GPU timings and server ticks rather than being copied three times
+     */
+    public static <T> FrameStatistics from(List<T> samples, ToLongFunction<T> nanos) {
         if (samples == null || samples.isEmpty()) {
             throw new HarnessException("cannot summarise an empty capture");
         }
-        double[] millis = samples.stream().mapToDouble(FrameSample::millis).sorted().toArray();
+        double[] millis =
+                samples.stream().mapToLong(nanos).mapToDouble(n -> n / 1_000_000d).sorted().toArray();
         double sum = 0;
         for (double value : millis) {
             sum += value;

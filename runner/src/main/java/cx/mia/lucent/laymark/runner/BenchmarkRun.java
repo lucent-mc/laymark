@@ -2,6 +2,11 @@ package cx.mia.lucent.laymark.runner;
 
 import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.harness.FrameStatistics;
+import cx.mia.lucent.laymark.core.harness.Measurement;
+import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
+import cx.mia.lucent.laymark.core.harness.TickSample;
+import cx.mia.lucent.laymark.core.harness.TimingChannel;
+import cx.mia.lucent.laymark.core.harness.WorkCounters;
 import cx.mia.lucent.laymark.core.plan.PlanCodec;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
 import cx.mia.lucent.laymark.core.protocol.Frame;
@@ -181,7 +186,12 @@ public final class BenchmarkRun {
         System.out.println("  <- " + frame);
     }
 
-    /** A short human summary. The full document is the artifact; this is for the operator. */
+    /**
+     * A short human summary. The full document is the artifact; this is for the operator.
+     *
+     * <p>Prints the channels beneath the headline rather than only the headline, because the first
+     * question after "it got slower" is always "where" — and the answer is already in the file.
+     */
     public static void print(RunResult result) {
         System.out.printf("%nrun %s%n", result.runId());
         for (ScenarioResult scenario : result.scenarios()) {
@@ -190,22 +200,68 @@ public final class BenchmarkRun {
                         "  %-24s FAILED  %s%n", scenario.scenarioId(), scenario.failureReason());
                 continue;
             }
-            FrameStatistics stats = scenario.statistics();
-            System.out.printf(
-                    "  %-24s %5d frames  mean %6.2fms (%5.1f fps)  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
-                    scenario.scenarioId() + "#" + scenario.repetition(),
-                    stats.count(),
-                    stats.meanMillis(),
-                    stats.meanFramesPerSecond(),
-                    stats.p95Millis(),
-                    stats.p99Millis(),
-                    stats.maxMillis());
-            for (String flag : scenario.flags()) {
-                System.out.printf("      ! %s%n", flag);
-            }
+            printScenario(scenario);
         }
         for (String flag : result.flags()) {
             System.out.printf("  ! %s%n", flag);
         }
+    }
+
+    private static void printScenario(ScenarioResult scenario) {
+        Measurement measurement = scenario.measurement();
+        FrameStatistics frames = measurement.frameStatistics();
+
+        System.out.printf(
+                "  %-24s %5d frames  mean %6.2fms (%5.1f fps)  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
+                scenario.scenarioId() + "#" + scenario.repetition(),
+                frames.count(),
+                frames.meanMillis(),
+                frames.meanFramesPerSecond(),
+                frames.p95Millis(),
+                frames.p99Millis(),
+                frames.maxMillis());
+
+        // Nested channels, widest first, so the gaps between them read as the decomposition they
+        // are rather than as three competing measurements of the same thing.
+        printChannel("render call", measurement.frameStatistics(TimingChannel.RENDER_CALL));
+        printChannel("submit", measurement.frameStatistics(TimingChannel.SUBMIT));
+        if (!measurement.gpu().isEmpty()) {
+            printChannel("gpu", measurement.gpuStatistics());
+        }
+        if (!measurement.serverTicks().isEmpty()) {
+            FrameStatistics ticks = measurement.serverTickStatistics();
+            long overBudget =
+                    measurement.serverTicks().stream().filter(TickSample::overBudget).count();
+            System.out.printf(
+                    "      %-12s %5d ticks   mean %6.2fms  p95 %6.2fms  max %6.2fms  %d over budget%n",
+                    "server tick", ticks.count(), ticks.meanMillis(), ticks.p95Millis(),
+                    ticks.maxMillis(), overBudget);
+        }
+
+        WorkCounters work = measurement.work();
+        if (work != null) {
+            System.out.printf(
+                    "      %-12s sections %+d  client chunks %+d  server chunks %+d%n",
+                    "work", work.renderedSections(), work.clientChunks(), work.serverChunks());
+        }
+        if (measurement.memoryBefore() != null && measurement.memoryAfter() != null) {
+            MemorySnapshot delta = measurement.memoryAfter().minus(measurement.memoryBefore());
+            System.out.printf(
+                    "      %-12s heap %6.1fMB  %+d collections, %+dms paused%n",
+                    "memory",
+                    measurement.memoryAfter().heapUsedMegabytes(),
+                    delta.gcCount(),
+                    delta.gcTimeMillis());
+        }
+
+        for (String flag : scenario.flags()) {
+            System.out.printf("      ! %s%n", flag);
+        }
+    }
+
+    private static void printChannel(String label, FrameStatistics stats) {
+        System.out.printf(
+                "      %-12s %5d        mean %6.2fms  p95 %6.2fms  max %6.2fms%n",
+                label, stats.count(), stats.meanMillis(), stats.p95Millis(), stats.maxMillis());
     }
 }

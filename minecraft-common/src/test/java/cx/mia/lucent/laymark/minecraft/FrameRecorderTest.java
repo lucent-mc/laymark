@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cx.mia.lucent.laymark.core.harness.FrameSample;
+import cx.mia.lucent.laymark.core.harness.Throttle;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -24,15 +25,15 @@ class FrameRecorderTest {
      */
     @Test
     void ignoresFramesOutsideACapture() {
-        recorder.onFramePresented();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
         assertFalse(recorder.recording());
 
         recorder.start();
-        recorder.onFramePresented();
-        recorder.onFramePresented();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
         List<FrameSample> captured = recorder.stop();
 
-        recorder.onFramePresented();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
         assertEquals(1, captured.size(), "two presents bound one interval");
         assertTrue(recorder.stop().isEmpty(), "a closed window keeps nothing");
     }
@@ -44,7 +45,7 @@ class FrameRecorderTest {
     @Test
     void theFirstFrameOfAWindowYieldsNoInterval() {
         recorder.start();
-        recorder.onFramePresented();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
         assertTrue(recorder.stop().isEmpty());
     }
 
@@ -52,7 +53,7 @@ class FrameRecorderTest {
     void producesOneSampleFewerThanTheFramesItSaw() {
         recorder.start();
         for (int i = 0; i < 10; i++) {
-            recorder.onFramePresented();
+            recorder.onFramePresented(4_000_000L, Throttle.NONE);
         }
         assertEquals(9, recorder.stop().size());
     }
@@ -60,22 +61,56 @@ class FrameRecorderTest {
     @Test
     void startingAgainDiscardsThePreviousWindowAndItsPredecessor() {
         recorder.start();
-        recorder.onFramePresented();
-        recorder.onFramePresented();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
 
         recorder.start();
-        recorder.onFramePresented();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
 
         assertTrue(
                 recorder.stop().isEmpty(),
                 "a restarted window must not pair its first frame with the old one");
     }
 
+    /**
+     * The render call is recorded beside the interval rather than instead of it. It is a strict
+     * subset -- vanilla starts that timer after the frame's client ticks and reads it before the
+     * swap -- so a report that confused the two would understate every frame.
+     */
+    @Test
+    void carriesTheSubChannelsAlongsideTheInterval() {
+        recorder.start();
+        recorder.onRenderFrameStart();
+        recorder.onRenderFrameEnd();
+        recorder.onFramePresented(4_000_000L, Throttle.NONE);
+        recorder.onFramePresented(4_500_000L, Throttle.NONE);
+
+        FrameSample sample = recorder.stop().get(0);
+        assertEquals(4_500_000L, sample.renderCallNanos());
+        assertTrue(sample.submitNanos() > 0, "the submit bracket should have been measured");
+        assertTrue(
+                sample.intervalNanos() > 0,
+                "the interval is measured independently of what vanilla reports");
+    }
+
+    /** A throttle that engages mid-window is only visible if it is recorded per frame. */
+    @Test
+    void recordsTheThrottleStateOfEachFrame() {
+        recorder.start();
+        recorder.onFramePresented(1, Throttle.NONE);
+        recorder.onFramePresented(1, Throttle.NONE);
+        recorder.onFramePresented(1, Throttle.SHORT_AFK);
+
+        List<FrameSample> captured = recorder.stop();
+        assertEquals(Throttle.NONE, captured.get(0).throttle());
+        assertEquals(Throttle.SHORT_AFK, captured.get(1).throttle());
+    }
+
     @Test
     void offsetsAreOrderedFromTheStartOfTheWindow() {
         recorder.start();
         for (int i = 0; i < 4; i++) {
-            recorder.onFramePresented();
+            recorder.onFramePresented(4_000_000L, Throttle.NONE);
         }
         List<FrameSample> captured = recorder.stop();
         for (int i = 1; i < captured.size(); i++) {
@@ -96,7 +131,7 @@ class FrameRecorderTest {
                         () -> {
                             running.countDown();
                             for (int i = 0; i < 200_000; i++) {
-                                recorder.onFramePresented();
+                                recorder.onFramePresented(4_000_000L, Throttle.NONE);
                             }
                         });
         producer.start();
