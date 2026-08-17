@@ -13,6 +13,7 @@ import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.ResultCodec;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import cx.mia.lucent.laymark.runner.launch.GameProcess;
 import cx.mia.lucent.laymark.runner.launch.HostPlatform;
 import cx.mia.lucent.laymark.runner.launch.LaunchAssembly;
@@ -24,6 +25,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -46,7 +48,11 @@ public final class BenchmarkRun {
     private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(30);
 
     public static RunResult execute(
-            ModrinthInstance instance, RunPlan plan, Path outputDirectory, Duration timeout)
+            ModrinthInstance instance,
+            RunPlan plan,
+            Path outputDirectory,
+            Path sceneRoot,
+            Duration timeout)
             throws IOException {
 
         instance.requireUsable();
@@ -57,6 +63,7 @@ public final class BenchmarkRun {
         Path stderr = outputDirectory.resolve("game-stderr.log");
 
         writePlan(instance, plan);
+        stageScenes(instance, plan, sceneRoot);
 
         // Bind before launching. The port then exists before anything could connect to it, so
         // there is no startup race and nothing to discover.
@@ -180,6 +187,47 @@ public final class BenchmarkRun {
         Path path = instance.gameDirectory().resolve(Laymark.PLAN_PATH);
         Files.createDirectories(path.getParent());
         Files.writeString(path, PlanCodec.write(plan), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Copies every scene a scenario references into the instance.
+     *
+     * <p>A config and its schematics live wherever the operator keeps them; the harness reads them
+     * from inside the game, which has no idea where that was. Staging them under a known directory
+     * is what lets a plan name a scene by something the harness can actually resolve.
+     *
+     * <p>Copied fresh every run rather than cached. A stale scene from a previous run would place
+     * silently and measure geometry nobody configured, which is exactly the class of error the
+     * count verification exists to catch — and cheaper to prevent than to detect.
+     *
+     * @param sceneRoot where the config's relative paths resolve from
+     */
+    private static void stageScenes(ModrinthInstance instance, RunPlan plan, Path sceneRoot)
+            throws IOException {
+        List<ScenePlacement> scenes =
+                plan.scenarios().stream().flatMap(scenario -> scenario.content().stream()).toList();
+        if (scenes.isEmpty()) {
+            return;
+        }
+
+        Path destination = instance.gameDirectory().resolve(Laymark.SCENE_DIR);
+        Files.createDirectories(destination);
+
+        for (ScenePlacement scene : scenes) {
+            Path source = sceneRoot.resolve(scene.schematic()).normalize();
+            if (!Files.isRegularFile(source)) {
+                // Before the launch, not after. A missing scene discovered in-game costs a game
+                // start and reports as a harness failure rather than as the config error it is.
+                throw new LaunchException("no scene file at " + source);
+            }
+            Path target = destination.resolve(scene.schematic()).normalize();
+            if (!target.startsWith(destination)) {
+                throw new LaunchException("scene path escapes the staging directory: " + scene.schematic());
+            }
+            Files.createDirectories(target.getParent());
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        System.out.printf("staged %d scene file(s)%n", scenes.size());
     }
 
     private static void describe(Frame frame) {

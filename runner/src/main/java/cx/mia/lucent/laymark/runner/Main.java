@@ -75,6 +75,7 @@ public final class Main {
                             instance,
                             plan,
                             outputDirectory,
+                            sceneRoot(options),
                             Duration.ofSeconds(
                                     Long.parseLong(options.getOrDefault("timeout", "900"))));
 
@@ -114,6 +115,13 @@ public final class Main {
                         ? readConfig(Path.of(options.get("config")))
                         : configFromFlags(options);
         return config.resolve(runId, outputDirectory.toString());
+    }
+
+    /** Scene paths are relative to the config that declared them, or to the working directory. */
+    private static Path sceneRoot(Map<String, String> options) {
+        Path config = options.containsKey("config") ? Path.of(options.get("config")) : null;
+        Path parent = config == null ? null : config.toAbsolutePath().getParent();
+        return parent == null ? Path.of("").toAbsolutePath() : parent;
     }
 
     private static ScenarioConfig readConfig(Path path) {

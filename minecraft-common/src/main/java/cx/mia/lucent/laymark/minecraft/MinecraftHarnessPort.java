@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.minecraft;
 
+import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.HarnessPort;
@@ -28,6 +29,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -303,22 +305,51 @@ public final class MinecraftHarnessPort implements HarnessPort {
     }
 
     /**
-     * Places scene geometry.
+     * Places scene geometry, in declaration order, verifying counts against each file.
      *
-     * <p>Not implemented, and it refuses rather than doing nothing. A scenario that declares a
-     * scene and measures an empty world would complete normally and produce numbers for a
-     * different experiment than the one the config describes — which is the exact failure this
-     * project spends most of its effort preventing.
+     * <p>On the server thread rather than the client's: blocks and entities are server state, and
+     * the client learns about them through the same packets it would in play.
      */
     @Override
     public void placeContent(List<ScenePlacement> content) {
-        if (!content.isEmpty()) {
-            throw new HarnessException(
-                    "this build cannot place scene geometry, and "
-                            + content.size()
-                            + " placement(s) were declared; measuring the empty world instead would"
-                            + " answer a different question than the config asked");
+        if (content.isEmpty()) {
+            return;
         }
+        ClientThread.call(
+                "placing scene geometry",
+                Duration.ofMinutes(5),
+                () -> {
+                    MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+                    if (server == null) {
+                        throw new HarnessException("no integrated server to place a scene in");
+                    }
+                    ServerLevel level = server.overworld();
+                    Path sceneRoot =
+                            Minecraft.getInstance().gameDirectory.toPath().resolve(Laymark.SCENE_DIR);
+
+                    for (ScenePlacement placement : content) {
+                        Path file = sceneRoot.resolve(placement.schematic());
+                        Schematic schematic = SchematicReader.read(
+                                        file, level.registryAccess().lookupOrThrow(Registries.BLOCK));
+                        ScenePlacer.Placed placed =
+                                ScenePlacer.place(level, schematic, placement, file);
+
+                        // A scene that placed most of itself looks exactly like one that placed all
+                        // of itself, and the difference would read as a performance result.
+                        if (placed.blocks() != schematic.cellCount()) {
+                            throw new HarnessException(
+                                    file + " declares " + schematic.cellCount()
+                                            + " blocks but " + placed.blocks() + " were placed");
+                        }
+                        if (placed.entities() != schematic.entities().size()) {
+                            throw new HarnessException(
+                                    file + " declares " + schematic.entities().size()
+                                            + " entities but " + placed.entities()
+                                            + " were spawned");
+                        }
+                    }
+                    return null;
+                });
     }
 
     @Override

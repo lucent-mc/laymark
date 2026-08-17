@@ -46,6 +46,16 @@ public final class Laymark {
      */
     public static final String PLAN_PATH = "config/laymark/plan.json";
 
+    /**
+     * Where scene files are staged inside the instance, relative to the game directory.
+     *
+     * <p>A config and its schematics live wherever the operator keeps them; the harness reads them
+     * from inside the game. The runner copies them here so the plan can reference a scene by the
+     * name the harness will find, rather than by a path that only existed on the machine that
+     * wrote the config.
+     */
+    public static final String SCENE_DIR = "config/laymark/scenes";
+
     /** Result document name, written inside the plan's output directory. */
     public static final String RESULT_FILE = "result.json";
 }

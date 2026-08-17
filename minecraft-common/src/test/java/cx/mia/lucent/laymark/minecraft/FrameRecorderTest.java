@@ -93,17 +93,26 @@ class FrameRecorderTest {
                 "the interval is measured independently of what vanilla reports");
     }
 
-    /** A throttle that engages mid-window is only visible if it is recorded per frame. */
+    /**
+     * A throttle that engages mid-window is only visible if it is recorded per frame.
+     *
+     * <p>Spaced in real time on purpose: two back-to-back {@code System.nanoTime()} calls can
+     * return the same value on Windows, and the recorder correctly drops a zero-length interval —
+     * so presenting frames in a tight loop makes which samples survive a matter of luck.
+     */
     @Test
-    void recordsTheThrottleStateOfEachFrame() {
+    void recordsTheThrottleStateOfEachFrame() throws InterruptedException {
         recorder.start();
-        recorder.onFramePresented(1, Throttle.NONE);
-        recorder.onFramePresented(1, Throttle.NONE);
+        for (int i = 0; i < 3; i++) {
+            recorder.onFramePresented(1, Throttle.NONE);
+            Thread.sleep(1);
+        }
         recorder.onFramePresented(1, Throttle.SHORT_AFK);
 
         List<FrameSample> captured = recorder.stop();
+        assertEquals(3, captured.size());
         assertEquals(Throttle.NONE, captured.get(0).throttle());
-        assertEquals(Throttle.SHORT_AFK, captured.get(1).throttle());
+        assertEquals(Throttle.SHORT_AFK, captured.get(captured.size() - 1).throttle());
     }
 
     @Test
