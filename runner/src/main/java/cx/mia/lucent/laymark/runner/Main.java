@@ -71,11 +71,29 @@ public final class Main {
 
             RunPlan plan = plan(runId, outputDirectory, options);
 
+            RunControl control = new RunControl();
+            ExperimentListener listener = ExperimentListener.none();
+            if (options.containsKey("gui")) {
+                var window = cx.mia.lucent.laymark.runner.gui.RunnerWindow.open(control);
+                listener = window;
+                // Tee rather than plumb a log callback through every layer: the runner already
+                // says everything worth showing on stdout, and a window that shows less than the
+                // console is a window nobody trusts.
+                System.setOut(window.tee(System.out));
+                System.setErr(window.tee(System.err));
+            }
+
             if (options.containsKey("selftest")) {
-                selfTest(instance, plan, outputDirectory, sceneRoot(options), options);
+                selfTest(instance, plan, outputDirectory, sceneRoot(options), options, control, listener);
                 return;
             }
 
+            // A single run is a one-arm schedule as far as the window is concerned.
+            var arm =
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            "run", cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE, java.util.Set.of());
+            listener.scheduleBuilt(new ExperimentListener.Slate(List.of(arm), 1, 1, 1));
+            listener.runStarted(0, arm);
             RunResult result =
                     BenchmarkRun.execute(
                             instance,
@@ -83,7 +101,11 @@ public final class Main {
                             outputDirectory,
                             sceneRoot(options),
                             Duration.ofSeconds(
-                                    Long.parseLong(options.getOrDefault("timeout", "900"))));
+                                    Long.parseLong(options.getOrDefault("timeout", "900"))),
+                            control,
+                            listener);
+            listener.runFinished(0, arm, 0, false);
+            listener.finished(null);
 
             BenchmarkRun.print(result);
             System.out.printf("%nresults written to %s%n", outputDirectory);
@@ -136,16 +158,26 @@ public final class Main {
             RunPlan plan,
             Path outputDirectory,
             Path sceneRoot,
-            Map<String, String> options)
+            Map<String, String> options,
+            RunControl control,
+            ExperimentListener listener)
             throws java.io.IOException {
 
         var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(instance.gameDirectory());
         var installed = mods.read().enabledNames();
 
-        // Alternating B,C,B,C... where the "candidate" is byte-identical to the baseline. All
-        // baselines would compare nothing at all, which is a test that cannot fail.
+        // Acclimation first, then alternating B,C,B,C... where the "candidate" is byte-identical
+        // to the baseline. All baselines would compare nothing -- a test that cannot fail -- and
+        // skipping acclimation makes session warm-up read as a position effect: verified on a real
+        // run, where the control (always immediately after its baseline) measured 1.0% faster with
+        // an interval of 0.5% to 1.6%. The discarded warm-up run is what absorbs that.
         int arms = Integer.parseInt(options.getOrDefault("arms", "6"));
         List<cx.mia.lucent.laymark.core.experiment.Arm> runs = new java.util.ArrayList<>();
+        runs.add(
+                new cx.mia.lucent.laymark.core.experiment.Arm(
+                        "acclimation",
+                        cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
+                        installed));
         for (int i = 0; i < arms; i++) {
             boolean baseline = i % 2 == 0;
             runs.add(
@@ -165,7 +197,9 @@ public final class Main {
                         installed,
                         outputDirectory,
                         sceneRoot,
-                        Duration.ofSeconds(Long.parseLong(options.getOrDefault("timeout", "900"))));
+                        Duration.ofSeconds(Long.parseLong(options.getOrDefault("timeout", "900"))),
+                        control,
+                        listener);
 
         System.out.printf("%nself-test: %d runs, %d voided window(s)%n", arms, report.voids().size());
         if (report.comparisons().isEmpty()) {
@@ -215,8 +249,6 @@ public final class Main {
                 new Preset(
                         renderDistance,
                         renderDistance,
-                        defaults.framerateLimit(),
-                        defaults.vsync(),
                         defaults.particles(),
                         defaults.clouds(),
                         defaults.entityShadows(),
@@ -287,6 +319,7 @@ public final class Main {
                   --repetitions <n>       repeats, each in a fresh world (default 1)
                   --render-distance <n>   chunks, also used as simulation distance (default 12)
                   --timeout <seconds>     how long to wait for the run (default 900)
+  --gui                   open a window with status, schedule, and pause/stop
   --selftest              run N identical baselines and check none beats another
   --arms <n>              how many baselines the self-test uses (default 4)
                 %n""",

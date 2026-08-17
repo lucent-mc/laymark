@@ -53,7 +53,9 @@ public final class BenchmarkRun {
             RunPlan plan,
             Path outputDirectory,
             Path sceneRoot,
-            Duration timeout)
+            Duration timeout,
+            RunControl control,
+            ExperimentListener listener)
             throws IOException {
 
         instance.requireUsable();
@@ -87,13 +89,18 @@ public final class BenchmarkRun {
                     GameProcess.start(
                             instance.javaExecutable(), argv, instance.gameDirectory(), stdout, stderr)) {
 
+                // While this game lives, a stop kills it rather than waiting for the boundary.
+                control.registerAbort(() -> game.terminate(Duration.ofSeconds(5)));
+
                 HarnessServer.Session session = handshake(server, game, timeout, stdout, stderr);
                 System.out.printf("handshake ok from pid %d; the run has started%n", session.pid());
 
-                return collect(server, session, game, outputDirectory, timeout);
+                return collect(server, session, game, outputDirectory, timeout, listener);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new LaunchException("interrupted during the run", e);
+            } finally {
+                control.clearAbort();
             }
         }
     }
@@ -122,7 +129,8 @@ public final class BenchmarkRun {
             HarnessServer.Session session,
             GameProcess game,
             Path outputDirectory,
-            Duration timeout)
+            Duration timeout,
+            ExperimentListener listener)
             throws IOException, InterruptedException {
 
         AtomicReference<Frame> terminal = new AtomicReference<>();
@@ -137,6 +145,10 @@ public final class BenchmarkRun {
                                                 session,
                                                 frame -> {
                                                     describe(frame);
+                                                    if (frame instanceof Frame.ScenarioStarted started) {
+                                                        listener.scenarioStarted(
+                                                                started.scenarioId(), started.repetition());
+                                                    }
                                                     if (frame instanceof Frame.RunFinished
                                                             || frame instanceof Frame.RunFailed) {
                                                         terminal.set(frame);

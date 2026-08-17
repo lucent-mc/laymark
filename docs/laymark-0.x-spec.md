@@ -55,19 +55,21 @@ revision.
 ## 3. Identity and artifacts
 
 Gradle, one build. Group `cx.mia.lucent`, root package `cx.mia.lucent.laymark`, artifacts
-`laymark-<module>`. NeoForge mod ID `laymark`. Modrinth slug `laymark` (project `YxLVBTmi`).
+`laymark-<module>`. NeoForge mod ID `laymark`.
 
-Two published artifacts from one build, driven by a **single version property**:
+Two artifacts from one build, driven by a **single version property**:
 
-- **`laymark-neoforge-mc26.1.2-<version>.jar`** → Modrinth, which is the discovery surface modpack
-  developers actually browse.
-- **`laymark-runner-<version>.jar`** → GitHub Releases. Shaded, executable, run with `java -jar`.
-  Not on Modrinth, not on npm.
+- **`laymark-neoforge-mc26.1.2-<version>.jar`** — the mod, dropped into the instance under test.
+- **`laymark-runner-<version>.jar`** — shaded, executable, run with `java -jar`.
+
+Both go to **GitHub Releases only**. Laymark is **not published to a mod host**: it is development
+tooling rather than something anyone installs in a modpack they play, and it is largely
+AI-authored, which Modrinth's content rules (6.1, 6.2) do not permit for a published project.
 
 The **mod jar embeds the runner** as an inert resource, at a path NeoForge does not scan —
 explicitly *not* under `META-INF/jarjar/`. Stored that way it costs disk size only: no classes on
-the classpath, nothing loaded into the measured JVM. Someone who finds Laymark on Modrinth is
-never stranded without the runner. The embedding is **one-directional**; the runner embeds nothing.
+the classpath, nothing loaded into the measured JVM, and whoever has the mod has the runner. The
+embedding is **one-directional**; the runner embeds nothing.
 
 ## 4. Modules
 
@@ -158,6 +160,36 @@ Verified end to end with the full modded pack, through world creation and entry.
   perfectly plausible run of the wrong stack.
 - `inlay.index.json` is never mutated. Laymark needs a `.layignore` entry so it is not reconciled
   into the Layer and shipped — documented guidance for Inlay users, never enforced.
+
+### 5.3b Runner GUI
+
+The runner has a **GUI, opt-in via `--gui`**, alongside the headless mode unattended runs use.
+"No interactive CLI" stands: arguments configure the run, and the GUI observes and controls it —
+it never prompts for configuration.
+
+- **Status**: current state, progress as **`18/28 arms in 4/7 runs`** (arms are launches, runs are
+  selection rounds — §8.1), elapsed time, and estimated time remaining. The estimate is
+  extrapolated from the arms that have finished and is blank until one has.
+- **Pause / resume / stop.** Pause takes effect **at the next run boundary, never inside one** —
+  suspending a game mid-capture contaminates the window, so pausing means "finish the current run,
+  then hold". Stop is immediate: the current game is killed, the instance restored, and the report
+  written from the runs that completed.
+- **Now running**: the arm in flight and what it changes relative to the baseline stack, the
+  baseline it is measured against, and the scenario currently capturing. Those three, and **no
+  summary statistics for the run in flight** — no single live number distinguishes a real
+  improvement from noise, and one shown beside the grid would be read as the answer. The paired
+  comparison is the answer.
+- **The schedule**, every arm in order with its state (pending / running / done / failed). Read-only:
+  arguments decide what runs, so there is nothing here to add, remove, reorder or re-sort.
+- **The selection grid**: one column per round, candidates sorted by score within the column, the
+  round's winner marked — and shown as the **next column's baseline**, so the grid reads as the
+  greedy selection it depicts.
+- **The log**, the runner's console output teed into the window, so the operator never has to leave
+  it for the terminal.
+
+Swing, deliberately: it ships in the JDK, so the runner stays a single shaded jar with no toolkit
+dependency, and the GUI cannot end up beneath a published number — it runs in the runner process,
+never the game's.
 
 ### 5.4 Runner ↔ harness protocol
 
@@ -629,8 +661,8 @@ false-positive self-test and one failure-injection pass. Tier 4 needs a real dis
 self-hosted GPU runner was rejected for a specific reason: **a machine running CI is a machine whose
 thermal and load state is unsuitable for the benchmarking it also does.**
 
-Modrinth publication is **manual for 0.x**; the runner jar goes to GitHub Releases. Per release:
-changelog, and the compatibility matrix updated with the exact tuple.
+Publication is **manual for 0.x** and **GitHub Releases only** — see §3 for why there is no mod-host
+listing. Per release: changelog, and the compatibility matrix updated with the exact tuple.
 
 ## 13. Known limitations
 

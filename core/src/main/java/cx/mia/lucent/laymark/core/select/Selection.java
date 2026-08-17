@@ -107,18 +107,59 @@ public final class Selection {
      * different baseline than one judged earlier, and the two results would not be comparable
      * despite appearing side by side in the same round.
      */
-    public List<Outcome> round(List<String> pool, Gate gate) {
-        List<Outcome> outcomes = new ArrayList<>();
+    public List<Outcome> round(List<String> pool, Gate gate, Ranking ranking) {
+        List<Outcome> judged = new ArrayList<>();
         for (Bundle bundle : bundlesFor(pool)) {
             Verdict verdict = gate.judge(bundle);
-            outcomes.add(new Outcome(bundle, verdict, detailFor(bundle, verdict)));
+            judged.add(new Outcome(bundle, verdict, detailFor(bundle, verdict)));
         }
-        for (Outcome outcome : outcomes) {
-            if (outcome.verdict() == Verdict.PROMOTED) {
-                promoted.addAll(outcome.bundle().members());
+
+        // Exactly one promotion per round, the best of those that qualified. Promoting everything
+        // that merely failed to regress would collapse greedy forward selection into a single
+        // round -- and the whole point is that each promotion changes the baseline the next
+        // candidate is measured against.
+        Outcome best = null;
+        for (Outcome outcome : judged) {
+            if (outcome.verdict() != Verdict.PROMOTED) {
+                continue;
+            }
+            if (best == null
+                    || ranking.score(outcome.bundle()) > ranking.score(best.bundle())) {
+                best = outcome;
             }
         }
+
+        List<Outcome> outcomes = new ArrayList<>();
+        for (Outcome outcome : judged) {
+            boolean winner = outcome == best;
+            outcomes.add(
+                    winner
+                            ? outcome
+                            : new Outcome(
+                                    outcome.bundle(),
+                                    outcome.verdict() == Verdict.PROMOTED
+                                            ? Verdict.INCONCLUSIVE
+                                            : outcome.verdict(),
+                                    outcome.verdict() == Verdict.PROMOTED
+                                            ? "qualified but was not the best this round"
+                                            : outcome.detail()));
+        }
+        if (best != null) {
+            promoted.addAll(best.bundle().members());
+        }
         return outcomes;
+    }
+
+    /**
+     * Orders the candidates that qualified, so a round can promote the single best.
+     *
+     * <p>Separate from the {@link Gate} because qualifying and winning are different questions,
+     * and separate from runtime ordering because <strong>runtime must never influence which stack
+     * is recommended</strong>.
+     */
+    @FunctionalInterface
+    public interface Ranking {
+        double score(Bundle bundle);
     }
 
     private static String detailFor(Bundle bundle, Verdict verdict) {

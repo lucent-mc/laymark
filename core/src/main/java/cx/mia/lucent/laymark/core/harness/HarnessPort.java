@@ -58,8 +58,31 @@ public interface HarnessPort {
      */
     BarrierReport awaitReady(Duration timeout);
 
-    /** Places the player and suppresses input. */
+    /**
+     * Places the player, waits for the renderer to settle, and re-confirms the barrier.
+     *
+     * <p>For the phases that measure a steady state. Not for traversal, where the settling is the
+     * thing being measured — see {@link #teleport}.
+     */
     void position(Pose pose);
+
+    /**
+     * Moves the player and returns immediately.
+     *
+     * <p>Separate from {@link #position} because for {@link cx.mia.lucent.laymark.core.Phase#UNGENERATED_TRAVERSAL}
+     * <strong>the teleport is the measured event</strong>. A capture has to bracket the arrival,
+     * so nothing may block between opening the window and the move — and the settle-and-rebarrier
+     * that {@code position} performs would pay the entire cost before the window opened.
+     */
+    void teleport(Pose pose);
+
+    /**
+     * Blocks until a stop condition is met, with a capture already open.
+     *
+     * <p>Split out for the same reason as {@link #teleport}: a phase whose measured event happens
+     * mid-window needs the window opened, the event triggered, and only then the wait.
+     */
+    void awaitStop(StopCondition stop);
 
     /**
      * Whether the region around the pose has never been generated.
@@ -79,6 +102,15 @@ public interface HarnessPort {
      * cache and a mod cannot portably evict them. This is about the client's meshes.
      */
     boolean targetHasNoBuiltSections(Pose pose);
+
+    /**
+     * Pins the game rules that would otherwise vary inside a capture.
+     *
+     * <p>Time, weather and mob spawning all advance during a measured window at vanilla defaults --
+     * three variables moving independently of the thing under test, in both arms but never
+     * identically. Applied post-join because world creation takes no game rules.
+     */
+    void pinGameRules();
 
     /** Places scene geometry. Runs before any barrier, since it changes what there is to build. */
     void placeContent(List<ScenePlacement> content);

@@ -135,9 +135,20 @@ public final class Materialization {
      *
      * @throws HarnessException naming exactly what differs
      */
-    public static void verify(InstanceState observed, Set<String> enabled) {
+    public static void verify(InstanceState observed, Set<String> enabled, InstanceState expectedContent) {
         Set<String> actual = observed.enabledNames();
         if (actual.equals(new TreeSet<>(enabled))) {
+            // Names match; now the bytes. A jar replaced under the same name between rounds would
+            // otherwise pass, and the two arms would be comparing different code.
+            Map<String, ModFile> expected = expectedContent.byName();
+            for (ModFile file : observed.enabled()) {
+                ModFile was = expected.get(file.fileName());
+                if (was != null && !was.sha256().equals(file.sha256())) {
+                    throw new HarnessException(
+                            file.fileName() + " has different contents than when the run started;"
+                                    + " the two arms would not be comparing the same code");
+                }
+            }
             return;
         }
         Set<String> unexpected = new TreeSet<>(actual);

@@ -34,6 +34,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.levelgen.WorldOptions;
@@ -213,6 +214,40 @@ public final class MinecraftHarnessPort implements HarnessPort {
 
     @Override
     public void position(Pose pose) {
+        teleport(pose);
+        // Let the renderer rebuild around the new position, then re-confirm the barrier: the
+        // teleport invalidated the sections the earlier barrier was satisfied by.
+        ClientThread.sleep(SETTLE_AFTER_MOVE);
+        awaitReady(Duration.ofMinutes(2));
+    }
+
+    /**
+     * Pins the game rules that would otherwise vary inside a capture.
+     *
+     * <p>Post-join, because {@code createFreshLevel} takes no game rules — the sibling that does is
+     * a different entry point entirely. Left at vanilla defaults, time advances, weather changes
+     * and mobs spawn <em>during the measured window</em>: four variables moving independently of
+     * the thing under test, in both arms but never identically.
+     */
+    @Override
+    public void pinGameRules() {
+        ClientThread.run(
+                "pinning game rules",
+                () -> {
+                    MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+                    if (server == null) {
+                        throw new HarnessException("no integrated server to pin rules on");
+                    }
+                    GameRules rules = server.getGameRules();
+                    rules.set(GameRules.ADVANCE_TIME, false, server);
+                    rules.set(GameRules.ADVANCE_WEATHER, false, server);
+                    rules.set(GameRules.SPAWN_MOBS, false, server);
+                    rules.set(GameRules.SPAWN_MONSTERS, false, server);
+                });
+    }
+
+    @Override
+    public void teleport(Pose pose) {
         ClientThread.run(
                 "positioning the player",
                 () -> {
@@ -232,11 +267,6 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     player.getAbilities().invulnerable = true;
                     player.onUpdateAbilities();
                 });
-
-        // Let the renderer rebuild around the new position, then re-confirm the barrier: the
-        // teleport invalidated the sections the earlier barrier was satisfied by.
-        ClientThread.sleep(SETTLE_AFTER_MOVE);
-        awaitReady(Duration.ofMinutes(2));
     }
 
     /**
@@ -419,6 +449,15 @@ public final class MinecraftHarnessPort implements HarnessPort {
      * short capture and a completed one are not the same measurement, and silently substituting
      * one for the other would put the arms on different workloads.
      */
+    @Override
+    public void awaitStop(StopCondition stop) {
+        Opened opened = openedAt;
+        if (opened == null) {
+            throw new HarnessException("no capture is open");
+        }
+        awaitStop(stop, opened.work());
+    }
+
     private void awaitStop(StopCondition stop, WorkCounters workBefore) {
         if (stop.kind() == StopCondition.Kind.TIME) {
             ClientThread.sleep(stop.duration());

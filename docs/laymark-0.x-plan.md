@@ -108,7 +108,8 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
 - §5.4 Emit heartbeats and add an idle timeout; a hung harness currently consumes the full run
   timeout.
 - §5.3 Document the `.layignore` entry for Inlay users.
-- §12 Publish to Modrinth under the reserved slug.
+- §12 Cut a GitHub Release with both jars, the changelog, and the compatibility matrix. There is no
+  mod-host listing — see spec §3.
 
 ## Not in 0.x
 

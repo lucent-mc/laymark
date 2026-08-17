@@ -111,6 +111,7 @@ public final class HarnessRun {
 
         port.createWorld(world);
         BarrierReport barrier = port.awaitReady(READY_TIMEOUT);
+        port.pinGameRules();
 
         if (measuringSpawn) {
             Measurement spawn = port.endCapture();
@@ -127,31 +128,39 @@ public final class HarnessRun {
             // what there is to build, so a barrier satisfied beforehand says nothing about after.
             port.placeContent(scenario.content());
         }
-        port.position(scenario.pose());
 
         // After applying and loading, not before: the world load runs arbitrary mod code, and a
         // mod that reverts a setting does it there rather than during the setter call.
         PresetReadback readback = port.readPreset(scenario.preset());
-        List<String> flags = new ArrayList<>(readback.deviationsFrom(scenario.preset()));
+        requireSettingsHeld(scenario, readback, "after the world loaded");
+        List<String> flags = new ArrayList<>();
 
         for (Phase phase : scenario.measure()) {
             if (phase == Phase.SPAWN_GENERATION) {
                 continue; // already captured, around world creation
             }
-            requireNegativePrecondition(scenario, phase);
-
             long phaseStartedAt = System.nanoTime();
-            events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
-            Measurement measurement = port.capture(scenario.stopCondition());
+            Measurement measurement =
+                    phase == Phase.UNGENERATED_TRAVERSAL
+                            ? traverse(scenario, phaseStartedAt)
+                            : residentAt(scenario, phase, phaseStartedAt);
+
             if (!measurement.measured()) {
                 throw new HarnessException(
                         "scenario " + scenario.id() + " captured no frames for " + phase);
             }
+            // Re-read after the capture, not only before it. Preset verification is a runtime
+            // invariant, because the mods being measured are exactly the population that rewrites
+            // rendering settings -- a value reverted mid-capture produces a full set of samples
+            // taken under settings nobody asked for.
+            requireSettingsHeld(scenario, port.readPreset(scenario.preset()), "during " + phase);
+            requireNotThrottled(scenario, phase, measurement);
+
             segments.add(
                     new PhaseResult(
                             phase,
                             measurement,
-                            throttleFlags(measurement),
+                            List.of(),
                             Duration.ofNanos(System.nanoTime() - phaseStartedAt).toMillis()));
         }
 
@@ -166,6 +175,42 @@ public final class HarnessRun {
     }
 
     /**
+     * Measures the traversal into ungenerated terrain.
+     *
+     * <p>The precondition is checked <strong>before the player moves</strong>, because moving is
+     * what generates the target. Checking afterwards asks whether the thing just generated was
+     * ungenerated, which it never is — the phase could not pass its own precondition.
+     *
+     * <p>The window opens, then the teleport happens, then the wait. That ordering is the phase:
+     * the arrival is the measured event, so a capture that started after the player had already
+     * settled would report the cost of standing still.
+     */
+    private Measurement traverse(ScenarioSpec scenario, long phaseStartedAt) {
+        if (!port.targetIsUngenerated(scenario.pose())) {
+            throw new HarnessException(
+                    "scenario " + scenario.id()
+                            + " measures generation, but its target was already generated;"
+                            + " measuring it would report a cost that was already paid");
+        }
+        events.accept(
+                new Frame.PhaseEntered(
+                        scenario.id(), Phase.UNGENERATED_TRAVERSAL, phaseStartedAt));
+
+        port.beginCapture();
+        port.teleport(scenario.pose());
+        port.awaitStop(scenario.stopCondition());
+        return port.endCapture();
+    }
+
+    /** The phases that measure a settled state, where positioning is setup rather than the event. */
+    private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
+        port.position(scenario.pose());
+        requireNegativePrecondition(scenario, phase);
+        events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
+        return port.capture(scenario.stopCondition());
+    }
+
+    /**
      * Fails the repetition if the work being measured has already happened.
      *
      * <p>Two of the four phases have this hazard, and it is the most dangerous failure mode in the
@@ -176,14 +221,8 @@ public final class HarnessRun {
      */
     private void requireNegativePrecondition(ScenarioSpec scenario, Phase phase) {
         switch (phase) {
-            case UNGENERATED_TRAVERSAL -> {
-                if (!port.targetIsUngenerated(scenario.pose())) {
-                    throw new HarnessException(
-                            "scenario " + scenario.id()
-                                    + " measures generation, but its target was already generated;"
-                                    + " measuring it would report a cost that was already paid");
-                }
-            }
+            // Traversal checks its own, before the player moves -- see traverse().
+            case UNGENERATED_TRAVERSAL -> {}
             case GENERATED_STREAMING -> {
                 if (!port.targetHasNoBuiltSections(scenario.pose())) {
                     throw new HarnessException(
@@ -196,6 +235,45 @@ public final class HarnessRun {
             // own save -- and resident render is the one phase where "already finished" is the
             // point rather than a hazard.
             case SPAWN_GENERATION, RESIDENT_RENDER -> {}
+        }
+    }
+
+    /**
+     * Fails when a setting Laymark set has since drifted.
+     *
+     * <p>Hard, not a flag. This is the tier the spec fails closed on: anything Laymark can both set
+     * and verify, that then changes, invalidates the run outright. Recording it and carrying on
+     * would produce a comparison between two different configurations wearing one config's name.
+     */
+    private static void requireSettingsHeld(
+            ScenarioSpec scenario, PresetReadback readback, String when) {
+        List<String> deviations = readback.deviationsFrom(scenario.preset());
+        if (!deviations.isEmpty()) {
+            throw new HarnessException(
+                    "scenario " + scenario.id() + ": settings drifted " + when + " -- "
+                            + String.join("; ", deviations));
+        }
+    }
+
+    /**
+     * Fails when the framerate was held back at any point in a capture.
+     *
+     * <p>Also hard. A window that begins throttled is refused by the port; this catches the one
+     * that starts clean and is capped partway through, which leaves a distribution with an
+     * artificial ceiling in the middle of otherwise real samples.
+     */
+    private static void requireNotThrottled(
+            ScenarioSpec scenario, Phase phase, Measurement measurement) {
+        List<Throttle> throttles =
+                measurement.throttlesObserved().stream()
+                        .filter(throttle -> throttle != Throttle.NONE)
+                        .toList();
+        // Spawn generation is capped by vanilla whenever no level is loaded and a screen is up,
+        // which is precisely what world creation is. Failing on it would fail every such capture.
+        if (!throttles.isEmpty() && phase != Phase.SPAWN_GENERATION) {
+            throw new HarnessException(
+                    "scenario " + scenario.id() + ": framerate was throttled during " + phase
+                            + " (" + throttles + ")");
         }
     }
 

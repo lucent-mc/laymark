@@ -28,6 +28,11 @@ public final class PresetOptions {
 
     private PresetOptions() {}
 
+    /** Fixed and non-configurable; see the window note in {@link #apply}. */
+    private static final int WINDOW_WIDTH = 1600;
+
+    private static final int WINDOW_HEIGHT = 900;
+
     /**
      * Applies every setting, unconditionally.
      *
@@ -43,13 +48,21 @@ public final class PresetOptions {
 
         set(options.renderDistance(), preset.renderDistance(), "renderDistance");
         set(options.simulationDistance(), preset.simulationDistance(), "simulationDistance");
-        set(options.framerateLimit(), preset.framerateLimit(), "framerateLimit");
-        set(options.enableVsync(), preset.vsync(), "vsync");
+        // Mandatory overrides, not preset fields. A cap or vsync clamps frame time to something
+        // other than the work being measured.
+        set(options.framerateLimit(), Preset.UNLIMITED_FRAMERATE, "framerateLimit");
+        set(options.enableVsync(), Preset.VSYNC, "vsync");
         set(options.particles(), particleStatus(preset.particles()), "particles");
         set(options.cloudStatus(), cloudStatus(preset.clouds()), "clouds");
         set(options.entityShadows(), preset.entityShadows(), "entityShadows");
         set(options.biomeBlendRadius(), preset.biomeBlendRadius(), "biomeBlendRadius");
         set(options.fov(), preset.fieldOfView(), "fieldOfView");
+
+        // Windowed at a fixed size. A smaller window is less GPU-bound, so CPU-side differences
+        // show more clearly -- and a window that varied with whatever the instance last used would
+        // make two machines, or two runs, incomparable for a reason nobody recorded.
+        options.fullscreen().set(false);
+        Minecraft.getInstance().getWindow().setWindowed(WINDOW_WIDTH, WINDOW_HEIGHT);
 
         // A scripted camera generates no GLFW input, and vanilla reads that as an idle player: at
         // the default AFK setting the framerate is capped to 30 after a minute and 10 after ten.
@@ -79,8 +92,6 @@ public final class PresetOptions {
                 new Preset(
                         options.getEffectiveRenderDistance(),
                         options.simulationDistance().get(),
-                        options.framerateLimit().get(),
-                        requested.vsync(),
                         particleDetail(options.particles().get()),
                         cloudDetail(options.cloudStatus().get()),
                         options.entityShadows().get(),
