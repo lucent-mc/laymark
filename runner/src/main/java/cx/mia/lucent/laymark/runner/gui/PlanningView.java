@@ -1,6 +1,8 @@
 package cx.mia.lucent.laymark.runner.gui;
 
 import cx.mia.lucent.laymark.core.experiment.Schedule;
+import cx.mia.lucent.laymark.core.select.DependencyGraph;
+import cx.mia.lucent.laymark.runner.select.JarProbe;
 import cx.mia.lucent.laymark.runner.launch.InstalledVersion;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
 import cx.mia.lucent.laymark.runner.materialize.InlayIndex;
@@ -104,6 +106,11 @@ public final class PlanningView extends JPanel {
     private final JPanel modList = new JPanel();
     private final JLabel modCount = Theme.muted("");
     private final Map<String, RoleControl> roles = new LinkedHashMap<>();
+    private final JPanel presetRow = row();
+
+    private DependencyGraph graph;
+    private Map<String, String> modIdByFile = Map.of();
+    private Map<String, String> fileByModId = Map.of();
     private final Path root;
     private final String hereProfile;
 
@@ -235,51 +242,67 @@ public final class PlanningView extends JPanel {
      * would be a second way to say something the roster already says.
      */
     private JPanel presets() {
-        JButton minusCandidates = Theme.button("Baseline: pack minus candidates", false);
+        presetRow.removeAll();
+        presetRow.add(Theme.muted("Baseline:"));
+
+        JButton minusCandidates = Theme.button("Pack minus candidates", false);
         minusCandidates.setToolTipText(
-                "Everything installed stays in the baseline except the candidates. Answers:"
-                        + " what does this mod add to the pack as it stands?");
-        minusCandidates.addActionListener(unused -> assignAll(Role.BASELINE));
+                "Everything installed stays in the baseline except the candidates. Answers: what"
+                        + " does this mod add to the pack as it stands?");
+        minusCandidates.addActionListener(unused -> assign(name -> Role.BASELINE));
+        presetRow.add(minusCandidates);
 
-        JButton parentPack = Theme.button("Baseline: the pack this was built from", false);
-        parentPack.setToolTipText(
-                "Everything this Inlay layer adds is withheld, so candidates are measured against"
-                        + " the pack underneath. Vanilla when there is no inlay.index.json.");
-        parentPack.addActionListener(unused -> assignParentPack());
+        JButton blank = Theme.button("Blank slate", false);
+        blank.setToolTipText(
+                "Nothing but the candidates and whatever they require. Answers: what does this mod"
+                        + " do on its own?");
+        blank.addActionListener(unused -> assign(name -> Role.OFF));
+        presetRow.add(blank);
 
-        JPanel row = row();
-        row.add(minusCandidates);
-        row.add(parentPack);
-        return row;
+        // Only offered when there is an index to read. A button that silently means "vanilla"
+        // because no ancestry was recorded is a button that has answered a different question.
+        Set<String> added = inlayLayer();
+        if (added != null) {
+            JButton parent = Theme.button("Inlay parent minus candidates", false);
+            parent.setToolTipText(
+                    "Everything this layer adds is withheld, so candidates are measured against the"
+                            + " layer underneath. For a root layer that parent is vanilla.");
+            parent.addActionListener(unused -> assignInlayParent());
+            presetRow.add(parent);
+        }
+        return presetRow;
     }
 
-    /** Leaves candidates alone: a preset changes what they are measured against, not what they are. */
-    private void assignAll(Role role) {
+    private Set<String> inlayLayer() {
+        String profile = (String) profiles.getSelectedItem();
+        return profile == null
+                ? null
+                : InlayIndex.addedMods(root.resolve("profiles").resolve(profile));
+    }
+
+    /**
+     * Applies a preset, then lets dependencies settle.
+     *
+     * <p>Candidates are left where they are: a preset changes what they are measured against, not
+     * what they are.
+     */
+    private void assign(java.util.function.Function<String, Role> role) {
         roles.forEach(
                 (name, control) -> {
                     if (control.role() != Role.CANDIDATE) {
-                        control.set(role);
+                        control.set(role.apply(name));
                     }
                 });
+        settleDependencies();
         updateCount();
     }
 
-    private void assignParentPack() {
-        String profile = (String) profiles.getSelectedItem();
-        if (profile == null) {
+    private void assignInlayParent() {
+        Set<String> added = inlayLayer();
+        if (added == null) {
             return;
         }
-        Set<String> added = InlayIndex.addedMods(root.resolve("profiles").resolve(profile));
-        roles.forEach(
-                (name, control) -> {
-                    if (control.role() == Role.CANDIDATE) {
-                        return;
-                    }
-                    // No index means no recorded ancestor, so nothing here is known to be inherited
-                    // and the pack underneath is vanilla.
-                    control.set(added == null || added.contains(name) ? Role.OFF : Role.BASELINE);
-                });
-        updateCount();
+        assign(name -> added.contains(name) ? Role.OFF : Role.BASELINE);
         warnIfIndexIsStale(added);
     }
 
@@ -326,16 +349,110 @@ public final class PlanningView extends JPanel {
         roles.clear();
         String profile = (String) profiles.getSelectedItem();
         if (profile != null) {
-            for (String name : installed(root.resolve("profiles").resolve(profile))) {
-                RoleControl control = new RoleControl(name, this::updateCount);
+            Path gameDirectory = root.resolve("profiles").resolve(profile);
+            probeDependencies(gameDirectory);
+            for (String name : installed(gameDirectory)) {
+                RoleControl control = new RoleControl(name, this::roleChanged);
                 roles.put(name, control);
                 modList.add(control);
             }
         }
         modList.add(Box.createVerticalGlue());
+        presets();
         updateCount();
         revalidate();
         repaint();
+    }
+
+    private void roleChanged() {
+        settleDependencies();
+        updateCount();
+    }
+
+    /**
+     * Makes the roster loadable: everything a loaded mod requires is loaded, and nothing depends on
+     * a mod that is off.
+     *
+     * <p>Run after every change rather than only on the row that changed, because the two rules
+     * chase each other — withholding a library withholds its dependents, and one of those may have
+     * been the reason another library was on.
+     *
+     * <p>A required mod is brought back as <strong>baseline</strong>, never as a candidate. It then
+     * loads in every arm, so the comparison still isolates the candidate rather than measuring the
+     * candidate and its dependency together.
+     */
+    private void settleDependencies() {
+        if (graph == null) {
+            return;
+        }
+        for (int pass = 0; pass < roles.size() + 1; pass++) {
+            boolean changed = false;
+
+            for (Map.Entry<String, RoleControl> entry : roles.entrySet()) {
+                if (entry.getValue().role() == Role.OFF) {
+                    continue;
+                }
+                String modId = modIdByFile.get(entry.getKey());
+                if (modId == null) {
+                    continue;
+                }
+                for (String required : graph.closureOf(modId)) {
+                    RoleControl control = roles.get(fileByModId.get(required));
+                    if (control != null && control.role() == Role.OFF) {
+                        control.set(Role.BASELINE);
+                        changed = true;
+                    }
+                }
+            }
+
+            for (Map.Entry<String, RoleControl> entry : roles.entrySet()) {
+                if (entry.getValue().role() != Role.OFF) {
+                    continue;
+                }
+                String modId = modIdByFile.get(entry.getKey());
+                if (modId == null) {
+                    continue;
+                }
+                for (String dependent : graph.dependentsOf(modId)) {
+                    RoleControl control = roles.get(fileByModId.get(dependent));
+                    if (control != null && control.role() != Role.OFF) {
+                        control.set(Role.OFF);
+                        changed = true;
+                    }
+                }
+            }
+
+            if (!changed) {
+                return;
+            }
+        }
+    }
+
+    /** Reads every installed jar once, so a role change can consult the graph without touching disk. */
+    private void probeDependencies(Path gameDirectory) {
+        graph = null;
+        modIdByFile = Map.of();
+        fileByModId = Map.of();
+        Path mods = gameDirectory.resolve("mods");
+        if (!Files.isDirectory(mods)) {
+            return;
+        }
+        try (Stream<Path> jars = Files.list(mods)) {
+            var probed =
+                    JarProbe.inspect(
+                            jars.filter(Files::isRegularFile)
+                                    .filter(path -> path.getFileName().toString().endsWith(".jar"))
+                                    .toList());
+            graph = probed.graph();
+            modIdByFile = probed.modIdByFile();
+            Map<String, String> reversed = new LinkedHashMap<>();
+            modIdByFile.forEach((file, modId) -> reversed.putIfAbsent(modId, file));
+            fileByModId = reversed;
+        } catch (java.io.IOException | RuntimeException e) {
+            // Without a graph the roster still works; it just stops offering to keep itself
+            // loadable, which is better than refusing to plan a run.
+            System.err.println("could not read mod dependencies: " + e.getMessage());
+        }
     }
 
     /** What one mod is doing in this experiment. */

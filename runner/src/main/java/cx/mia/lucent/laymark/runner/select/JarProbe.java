@@ -46,7 +46,23 @@ public final class JarProbe {
      * because one exists would make the benchmark unusable on real packs.
      */
     public static DependencyGraph probe(List<Path> jars) {
+        return inspect(jars).graph();
+    }
+
+    /**
+     * The graph, plus which file each mod id came out of.
+     *
+     * <p>Edges are between mod ids because that is how a jar declares what it needs, but everything
+     * an operator touches is a file name. Something has to hold both, and it is the pass that
+     * already opened every jar.
+     *
+     * @param modIdByFile keyed by file name; a jar declaring no readable manifest is absent
+     */
+    public record Probed(DependencyGraph graph, Map<String, String> modIdByFile) {}
+
+    public static Probed inspect(List<Path> jars) {
         Map<String, Set<String>> requires = new LinkedHashMap<>();
+        Map<String, String> modIdByFile = new LinkedHashMap<>();
 
         for (Path jar : jars) {
             try (ZipFile zip = new ZipFile(jar.toFile())) {
@@ -55,12 +71,15 @@ public final class JarProbe {
                     requires
                             .computeIfAbsent(declaration.modId(), unused -> new TreeSet<>())
                             .addAll(declaration.requires());
+                    modIdByFile.put(jar.getFileName().toString(), declaration.modId());
                 }
             } catch (IOException e) {
                 throw new LaunchException("could not read " + jar, e);
             }
         }
-        return DependencyGraph.from(requires, DependencyGraph.Provenance.JAR_METADATA);
+        return new Probed(
+                DependencyGraph.from(requires, DependencyGraph.Provenance.JAR_METADATA),
+                modIdByFile);
     }
 
     private record Declaration(String modId, Set<String> requires) {}
