@@ -300,11 +300,12 @@ public final class BenchmarkRun {
         FrameStatistics frames = measurement.frameStatistics();
 
         System.out.printf(
-                "    %-22s %5d frames  mean %6.2fms (%5.1f fps)  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
+                "    %-22s %5d frames  mean %6.2fms (%5.1f fps)  1%%low %5.1f fps  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
                 segment.phase(),
                 frames.count(),
                 frames.meanMillis(),
                 frames.meanFramesPerSecond(),
+                frames.onePercentLowFramesPerSecond(),
                 frames.p95Millis(),
                 frames.p99Millis(),
                 frames.maxMillis());

@@ -128,6 +128,11 @@ public final class ExperimentRun {
                         continue;
                     }
                     SelectionRun.requireParity(stimulusReference, arm.id(), scenario);
+                    // Warm pass only, for the same reason SelectionRun scores warm only: cold and
+                    // warm are different populations, and pooling them inflates every interval.
+                    if (scenario.pass() == cx.mia.lucent.laymark.core.result.Pass.COLD) {
+                        continue;
+                    }
                     // Scored on what the stop condition selected. A completion target produces a
                     // variable-length window, so its frame distribution is not comparable across
                     // arms -- time per unit of work is, which is the point of the target.

@@ -10,9 +10,16 @@ import java.util.List;
  * config that generated it, the instance it ran on, or the version of Laymark that wrote it.
  *
  * @param protocolVersion what wrote this, so a future reader knows which shape to expect
+ * @param scenarioListRevision fingerprint of the resolved scenario list, order included. Array
+ *     position is part of a scenario's identity, so results from different revisions must never
+ *     be pooled — and this is what makes that refusable later.
  */
 public record RunResult(
-        String runId, int protocolVersion, List<ScenarioResult> scenarios, List<String> flags) {
+        String runId,
+        int protocolVersion,
+        String scenarioListRevision,
+        List<ScenarioResult> scenarios,
+        List<String> flags) {
 
     public RunResult {
         if (runId == null || runId.isBlank()) {
@@ -21,6 +28,12 @@ public record RunResult(
         if (protocolVersion < 1) {
             throw new HarnessException("result has no protocol version");
         }
+        // Absent on documents from before the field existed; "unrecorded" keeps them readable
+        // while still refusing to look like any real revision.
+        scenarioListRevision =
+                scenarioListRevision == null || scenarioListRevision.isBlank()
+                        ? "unrecorded"
+                        : scenarioListRevision;
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
         flags = flags == null ? List.of() : List.copyOf(flags);
     }

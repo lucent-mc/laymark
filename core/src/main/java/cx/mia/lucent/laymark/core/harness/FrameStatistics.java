@@ -12,6 +12,9 @@ import java.util.function.ToLongFunction;
  *
  * @param count how many samples the window contained; a percentile from few samples is noisy, so
  *     the count travels with the summary rather than being discarded
+ * @param onePercentLowMillis mean of the worst 1% of samples — the gamer's "1% low", as a
+ *     duration. Distinct from p99: p99 is the threshold the worst 1% crosses, this is how bad
+ *     that 1% actually was once it crossed.
  */
 public record FrameStatistics(
         int count,
@@ -20,6 +23,7 @@ public record FrameStatistics(
         double p95Millis,
         double p99Millis,
         double p999Millis,
+        double onePercentLowMillis,
         double minMillis,
         double maxMillis) {
 
@@ -53,8 +57,24 @@ public record FrameStatistics(
                 percentile(millis, 95),
                 percentile(millis, 99),
                 percentile(millis, 99.9),
+                onePercentLow(millis),
                 millis[0],
                 millis[millis.length - 1]);
+    }
+
+    /** Mean of the worst 1% (at least one sample), on the already-sorted array. */
+    private static double onePercentLow(double[] sorted) {
+        int worst = Math.max(1, sorted.length / 100);
+        double sum = 0;
+        for (int i = sorted.length - worst; i < sorted.length; i++) {
+            sum += sorted[i];
+        }
+        return sum / worst;
+    }
+
+    /** The 1% low as a framerate, which is how the number is usually quoted. */
+    public double onePercentLowFramesPerSecond() {
+        return 1_000d / onePercentLowMillis;
     }
 
     /**

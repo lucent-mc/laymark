@@ -7,6 +7,10 @@ import cx.mia.lucent.laymark.core.harness.Measurement;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
 import java.util.List;
 
+// Pass and arrayPosition are identity (§8.2): scenario 1 runs against a colder JVM than scenario
+// 5, and the warm pass against a warmer one than the cold, so a result that did not say which it
+// was could be pooled with one it must never be pooled with.
+
 /**
  * What one repetition of one scenario produced.
  *
@@ -26,6 +30,8 @@ import java.util.List;
 public record ScenarioResult(
         String scenarioId,
         int repetition,
+        Pass pass,
+        int arrayPosition,
         Outcome outcome,
         String failureReason,
         PresetReadback readback,
@@ -47,6 +53,9 @@ public record ScenarioResult(
         if (scenarioId == null || scenarioId.isBlank()) {
             throw new HarnessException("result has no scenario id");
         }
+        // Cold rather than null on old documents: absent means "from before passes existed",
+        // and those results were all first traversals.
+        pass = pass == null ? Pass.COLD : pass;
         if (outcome == null) {
             throw new HarnessException("result for " + scenarioId + " has no outcome");
         }
@@ -67,6 +76,8 @@ public record ScenarioResult(
     public static ScenarioResult completed(
             String scenarioId,
             int repetition,
+            Pass pass,
+            int arrayPosition,
             PresetReadback readback,
             List<String> flags,
             List<PhaseResult> segments,
@@ -81,21 +92,24 @@ public record ScenarioResult(
                                 && segments.stream().anyMatch(s -> !s.flags().isEmpty()));
         Outcome outcome = flagged ? Outcome.COMPLETED_WITH_FLAGS : Outcome.COMPLETED;
         return new ScenarioResult(
-                scenarioId, repetition, outcome, null, readback, flags, segments, barrier,
-                durationMillis);
+                scenarioId, repetition, pass, arrayPosition, outcome, null, readback, flags,
+                segments, barrier, durationMillis);
     }
 
-    public static ScenarioResult failed(String scenarioId, int repetition, String reason) {
+    public static ScenarioResult failed(
+            String scenarioId, int repetition, Pass pass, int arrayPosition, String reason) {
         return new ScenarioResult(
                 scenarioId,
                 repetition,
+                pass,
+                arrayPosition,
                 Outcome.FAILED,
                 reason,
                 null,
                 List.of(),
                 List.of(),
                 BarrierReport.none(),
-                 0);
+                0);
     }
 
     public boolean measured() {
