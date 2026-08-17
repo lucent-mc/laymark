@@ -45,7 +45,18 @@ public final class Harness {
      * @param events where to report progress; the runner is on the other end
      */
     public static Thread start(ClientChannels channels, Consumer<Frame> events) {
-        Thread thread = new Thread(() -> execute(channels, events), "laymark-harness");
+        return start(channels, events, List::of);
+    }
+
+    /**
+     * @param inventory the loader's account of what loaded, by mod id, read once at result time.
+     *     Supplied by the loader module because only it may import FML.
+     */
+    public static Thread start(
+            ClientChannels channels,
+            Consumer<Frame> events,
+            java.util.function.Supplier<List<String>> inventory) {
+        Thread thread = new Thread(() -> execute(channels, events, inventory), "laymark-harness");
         // Daemon: if the run dies in a way that leaves this thread parked, the game must still be
         // able to exit. A benchmark that will not quit is worse than one that failed.
         thread.setDaemon(true);
@@ -53,7 +64,10 @@ public final class Harness {
         return thread;
     }
 
-    private static void execute(ClientChannels channels, Consumer<Frame> events) {
+    private static void execute(
+            ClientChannels channels,
+            Consumer<Frame> events,
+            java.util.function.Supplier<List<String>> inventory) {
         try {
             if (!ClientThread.await("waiting for the client to boot", BOOT_TIMEOUT, BOOT_POLL, 3,
                     Readiness::idleAtMenu)) {
@@ -63,6 +77,7 @@ public final class Harness {
             RunPlan plan = readPlan();
             MinecraftHarnessPort port = new MinecraftHarnessPort(channels);
             RunResult result = new HarnessRun(plan, port, events).execute();
+            result = withInventory(result, inventory.get());
             Path written = writeResult(plan, withChannelFlags(result, port));
 
             events.accept(new Frame.RunFinished(written.toString()));
@@ -102,8 +117,19 @@ public final class Harness {
                 result.runId(),
                 result.protocolVersion(),
                 result.scenarioListRevision(),
+                result.loadedMods(),
                 result.scenarios(),
                 flags);
+    }
+
+    private static RunResult withInventory(RunResult result, List<String> loadedMods) {
+        return new RunResult(
+                result.runId(),
+                result.protocolVersion(),
+                result.scenarioListRevision(),
+                loadedMods,
+                result.scenarios(),
+                result.flags());
     }
 
     /**
@@ -146,8 +172,13 @@ public final class Harness {
             Files.createDirectories(directory);
             Files.writeString(
                     directory.resolve("plan.json"), PlanCodec.write(plan), StandardCharsets.UTF_8);
+            // Samples out to samples/*.jsonl.gz first; the result document keeps the summaries
+            // and a pointer per phase. The series stay authoritative -- they just stop being
+            // 4.2 MB of pretty-printed JSON in the middle of the document everyone reads.
+            RunResult externalized =
+                    cx.mia.lucent.laymark.core.result.SampleStore.externalize(result, directory);
             Path resultPath = directory.resolve(Laymark.RESULT_FILE);
-            Files.writeString(resultPath, ResultCodec.write(result), StandardCharsets.UTF_8);
+            Files.writeString(resultPath, ResultCodec.write(externalized), StandardCharsets.UTF_8);
             return resultPath;
         } catch (IOException e) {
             throw new UncheckedIOException("could not write results to " + directory, e);

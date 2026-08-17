@@ -297,7 +297,8 @@ public final class BenchmarkRun {
     /** One line per measured phase, then its channels beneath. */
     private static void printSegment(PhaseResult segment) {
         Measurement measurement = segment.measurement();
-        FrameStatistics frames = measurement.frameStatistics();
+        var summaries = segment.summaries();
+        FrameStatistics frames = summaries.interval();
 
         System.out.printf(
                 "    %-22s %5d frames  mean %6.2fms (%5.1f fps)  1%%low %5.1f fps  p95 %6.2fms  p99 %6.2fms  max %6.2fms%n",
@@ -312,10 +313,10 @@ public final class BenchmarkRun {
 
         // Nested channels, widest first, so the gaps between them read as the decomposition they
         // are rather than as three competing measurements of the same thing.
-        printChannel("render call", measurement.frameStatistics(TimingChannel.RENDER_CALL));
-        printChannel("submit", measurement.frameStatistics(TimingChannel.SUBMIT));
-        if (!measurement.gpu().isEmpty()) {
-            printChannel("gpu", measurement.gpuStatistics());
+        printChannel("render call", summaries.renderCall());
+        printChannel("submit", summaries.submit());
+        if (summaries.gpu() != null) {
+            printChannel("gpu", summaries.gpu());
         }
         SparkStatistics spark = measurement.spark();
         if (spark != null) {

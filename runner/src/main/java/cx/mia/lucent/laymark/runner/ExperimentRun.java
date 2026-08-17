@@ -58,6 +58,7 @@ public final class ExperimentRun {
 
         List<Measured> measured = new ArrayList<>();
         List<Comparison.Run> baselineRuns = new ArrayList<>();
+        String[] scenarioListRevision = {null};
         Map<String, Map.Entry<String, cx.mia.lucent.laymark.core.harness.PresetReadback>>
                 stimulusReference = new LinkedHashMap<>();
         // One round for now: the greedy driver that makes several is slice 9, and until it exists
@@ -84,7 +85,10 @@ public final class ExperimentRun {
                 // leaves a folder that boots perfectly and runs the wrong stack.
                 Materialization.verify(mods.read(), arm.enabled(), initial);
 
-                Path armOutput = outputDirectory.resolve(String.format("%03d-%s", sequence, arm.id()));
+                Path armOutput =
+                        outputDirectory
+                                .resolve("runs")
+                                .resolve(String.format("%03d-%s", sequence, arm.id()));
                 // Per-arm output directory, carried on the plan itself. The harness writes its
                 // result to plan.outputDirectory(), so a plan reused across arms would have every
                 // run overwrite the last and leave only the final one archived.
@@ -113,6 +117,8 @@ public final class ExperimentRun {
                     }
                     throw e;
                 }
+
+                scenarioListRevision[0] = result.scenarioListRevision();
 
                 if (!arm.scored()) {
                     System.out.println("  (acclimation, discarded)");
@@ -164,8 +170,11 @@ public final class ExperimentRun {
         listener.finished(report);
 
         Files.createDirectories(outputDirectory);
+        EnvironmentFile.write(outputDirectory, instance, scenarioListRevision[0]);
         Files.writeString(
-                outputDirectory.resolve("report.json"), ReportCodec.write(report), StandardCharsets.UTF_8);
+                outputDirectory.resolve("experiment.json"),
+                ReportCodec.write(report),
+                StandardCharsets.UTF_8);
         Files.writeString(
                 outputDirectory.resolve("report.md"), MarkdownReport.render(report), StandardCharsets.UTF_8);
         return report;
@@ -227,6 +236,7 @@ public final class ExperimentRun {
                 comparisons,
                 voids,
                 List.of(),
+                List.of(),
                 Map.of(
                         "java", System.getProperty("java.version"),
                         "scenarios", String.valueOf(plan.scenarios().size())));
@@ -248,7 +258,7 @@ public final class ExperimentRun {
         if (spec.stopCondition().kind() == cx.mia.lucent.laymark.core.plan.StopCondition.Kind.CHUNKS) {
             Double perChunk =
                     scenario.segments().get(scenario.segments().size() - 1)
-                            .measurement()
+                            .summaries()
                             .millisPerChunkReceived();
             if (perChunk != null) {
                 return perChunk;

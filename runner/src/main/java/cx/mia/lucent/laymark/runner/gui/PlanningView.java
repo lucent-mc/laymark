@@ -72,6 +72,7 @@ public final class PlanningView extends JPanel {
             Set<String> candidates,
             Map<String, Set<String>> requires,
             List<cx.mia.lucent.laymark.core.select.Branching.Conflict> conflicts,
+            Map<String, String> modIdByFile,
             Schedule schedule,
             Map<String, String> displayNames) {}
 
@@ -929,6 +930,7 @@ public final class PlanningView extends JPanel {
                 named(Role.CANDIDATE),
                 requires,
                 conflicts,
+                Map.copyOf(modIdByFile),
                 parsed,
                 Map.copyOf(displayNameByFile));
     }

@@ -67,6 +67,7 @@ public final class SelectionRun {
             List<String> pool,
             Map<String, Set<String>> requires,
             List<cx.mia.lucent.laymark.core.select.Branching.Conflict> conflicts,
+            Map<String, String> modIdByFile,
             Schedule schedule,
             Path outputDirectory,
             Path sceneRoot,
@@ -133,7 +134,9 @@ public final class SelectionRun {
         List<Comparison> allComparisons = new ArrayList<>();
         List<Comparison.Run> allBaselineRuns = new ArrayList<>();
         List<SelectionReport.Round> roundHistory = new ArrayList<>();
+        List<String> trustFlags = new ArrayList<>();
         List<String> stack = new ArrayList<>();
+        String scenarioListRevision = null;
         List<Measured> originalBaseline = null;
         String baselineLabel = "baseline";
         int sequence = 0;
@@ -182,7 +185,9 @@ public final class SelectionRun {
                     Materialization.verify(mods.read(), arm.enabled(), initial);
 
                     Path armOutput =
-                            outputDirectory.resolve(String.format("%03d-%s", sequence, arm.id()));
+                            outputDirectory
+                                    .resolve("runs")
+                                    .resolve(String.format("%03d-%s", sequence, arm.id()));
                     RunPlan armPlan =
                             new RunPlan(
                                     plan.runId(),
@@ -208,6 +213,10 @@ public final class SelectionRun {
                         }
                         throw e;
                     }
+
+                    scenarioListRevision = result.scenarioListRevision();
+                    requireInventory(arm, result, participants, modIdByFile);
+                    collectTrustFlags(trustFlags, sequence, arm, result);
 
                     if (!arm.scored()) {
                         System.out.println("  (acclimation, discarded)");
@@ -361,14 +370,18 @@ public final class SelectionRun {
                         allComparisons,
                         Drift.detect(allBaselineRuns),
                         List.of(),
+                        trustFlags,
                         Map.of(
                                 "java", System.getProperty("java.version"),
                                 "scenarios", String.valueOf(plan.scenarios().size())));
         listener.finished(report);
 
         Files.createDirectories(outputDirectory);
+        EnvironmentFile.write(outputDirectory, instance, scenarioListRevision);
+        // experiment.json is the §5.5 name: the whole experiment's conclusions, beside runs/ and
+        // environment.json. report.md is the human rendering of the same data.
         Files.writeString(
-                outputDirectory.resolve("report.json"),
+                outputDirectory.resolve("experiment.json"),
                 ReportCodec.write(report),
                 StandardCharsets.UTF_8);
         Files.writeString(
@@ -412,6 +425,59 @@ public final class SelectionRun {
         }
     }
 
+    /**
+     * The in-process check that materialisation produced the arm: FML's own inventory.
+     *
+     * <p>File renames can succeed and still lie — a jar cached elsewhere, a loader that scanned
+     * before the rename. The loader's account of what actually loaded is the only evidence from
+     * inside the process, so an enabled participant's mod id must be in it and a withheld one's
+     * must not.
+     */
+    private static void requireInventory(
+            Arm arm, RunResult result, Set<String> participants, Map<String, String> modIdByFile) {
+        if (result.loadedMods().isEmpty()) {
+            return; // an older mod build; nothing to verify against
+        }
+        for (String file : arm.enabled()) {
+            String modId = modIdByFile.get(file);
+            if (modId != null && !result.loadedMods().contains(modId)) {
+                throw new LaunchException(
+                        "arm " + arm.id() + " enabled " + file + " but the game did not load "
+                                + modId + "; materialisation did not produce this arm");
+            }
+        }
+        for (String file : participants) {
+            if (arm.enabled().contains(file)) {
+                continue;
+            }
+            String modId = modIdByFile.get(file);
+            if (modId != null && result.loadedMods().contains(modId)) {
+                throw new LaunchException(
+                        "arm " + arm.id() + " withheld " + file + " but the game loaded " + modId
+                                + " anyway; materialisation did not produce this arm");
+            }
+        }
+    }
+
+    /** Every annotation any arm produced, prefixed so a reader can find the arm it belongs to. */
+    private static void collectTrustFlags(
+            List<String> into, int sequence, Arm arm, RunResult result) {
+        String prefix = String.format("%03d-%s", sequence, arm.id());
+        for (String flag : result.flags()) {
+            into.add(prefix + ": " + flag);
+        }
+        for (ScenarioResult scenario : result.scenarios()) {
+            for (String flag : scenario.flags()) {
+                into.add(prefix + " " + scenario.scenarioId() + "#" + scenario.repetition() + ": " + flag);
+            }
+            if (scenario.outcome() == ScenarioResult.Outcome.FAILED) {
+                into.add(
+                        prefix + " " + scenario.scenarioId() + "#" + scenario.repetition()
+                                + " FAILED: " + scenario.failureReason());
+            }
+        }
+    }
+
     /** What the whole selection costs in launches, so progress and the ETA span every round. */
     private static int projectArms(Schedule schedule, int candidates) {
         int total = 0;
@@ -428,12 +494,12 @@ public final class SelectionRun {
     }
 
     private static Metrics metricsOf(ScenarioResult scenario) {
-        var measurement = scenario.segments().get(scenario.segments().size() - 1).measurement();
-        var spark = measurement.spark();
+        var segment = scenario.segments().get(scenario.segments().size() - 1);
+        var spark = segment.measurement().spark();
         return new Metrics(
                 spark == null ? null : spark.millisPerTickMean(),
-                measurement.frameStatistics().meanFramesPerSecond(),
-                measurement.millisPerChunkReceived());
+                segment.summaries().interval().meanFramesPerSecond(),
+                segment.summaries().millisPerChunkReceived());
     }
 
     /** Relative spread of this round's baseline runs on one scenario, as a percent; null below n=2. */
