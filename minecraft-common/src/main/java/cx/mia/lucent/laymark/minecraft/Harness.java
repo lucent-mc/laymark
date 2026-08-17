@@ -39,6 +39,9 @@ public final class Harness {
 
     private static final Duration BOOT_POLL = Duration.ofMillis(200);
 
+    /** Comfortably inside the runner's idle timeout, so one lost beat is not a death sentence. */
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
+
     /**
      * Starts the run on its own thread and returns immediately.
      *
@@ -76,7 +79,31 @@ public final class Harness {
 
             RunPlan plan = readPlan();
             MinecraftHarnessPort port = new MinecraftHarnessPort(channels);
-            RunResult result = new HarnessRun(plan, port, events).execute();
+
+            // Liveness, decoupled from progress: a 30-minute capture emits no progress frames,
+            // and without this it is indistinguishable from a hang until the full run timeout
+            // burns down. The runner kills a game whose heartbeats stop.
+            Thread heartbeat =
+                    Thread.ofVirtual()
+                            .start(
+                                    () -> {
+                                        try {
+                                            while (!Thread.interrupted()) {
+                                                events.accept(
+                                                        new Frame.Heartbeat(System.nanoTime()));
+                                                Thread.sleep(HEARTBEAT_INTERVAL);
+                                            }
+                                        } catch (InterruptedException stopped) {
+                                            // The run ended; silence is now correct.
+                                        }
+                                    });
+
+            RunResult result;
+            try {
+                result = new HarnessRun(plan, port, events).execute();
+            } finally {
+                heartbeat.interrupt();
+            }
             result = withInventory(result, inventory.get());
             Path written = writeResult(plan, withChannelFlags(result, port));
 

@@ -60,6 +60,16 @@ tasks.jar {
     // fails with "Cannot expand ZIP ... as it does not exist". The closure keeps resolution lazy.
     dependsOn(bundled)
     from({ bundled.map { zipTree(it) } })
+
+    // The runner rides inside the mod jar as an inert FILE -- deliberately not under
+    // META-INF/jarjar/, which NeoForge scans and loads. Stored this way it costs disk size only:
+    // no classes on the classpath, nothing in the measured JVM, and whoever has the mod has the
+    // runner (§3). Extracted to the instance root on first human launch.
+    into("laymark") {
+        from(project(":runner").tasks.named("runnerJar"))
+        rename { "runner.jar" }
+    }
+
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

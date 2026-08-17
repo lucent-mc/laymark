@@ -169,7 +169,14 @@ look for it is the folder they already have open.
   intended arm by presence and hash. A rename that silently failed would otherwise produce a
   perfectly plausible run of the wrong stack.
 - `inlay.index.json` is never mutated. Laymark needs a `.layignore` entry so it is not reconciled
-  into the Layer and shipped — documented guidance for Inlay users, never enforced.
+  into the Layer and shipped — documented guidance for Inlay users, never enforced. The entries:
+
+  ```text
+  laymark-runner-*.jar
+  .laymark/
+  config/laymark.json
+  config/laymark-dependencies.json
+  ```
 
 ### 5.3b Runner GUI
 

@@ -40,9 +40,9 @@ public final class LaymarkNeoForge {
         String version = container.getModInfo().getVersion().toString();
 
         if (!HarnessClient.launchedByRunner()) {
-            // A human started the game. Laymark does nothing on its own, and 0.x will extract
-            // the runner here and say so rather than sitting silent.
-            LOG.info("Laymark {} loaded; not runner-launched, so nothing to do", version);
+            // A human started the game. Laymark measures nothing on its own, but it does the one
+            // thing that makes it usable: put the runner where the human is already looking.
+            extractRunner(version);
             return;
         }
 
@@ -73,6 +73,39 @@ public final class LaymarkNeoForge {
                                     }
                                 },
                                 "laymark-shutdown"));
+    }
+
+    /**
+     * Puts the embedded runner at the instance root, once.
+     *
+     * <p>Someone who found Laymark on a mod site has the mod and nothing else; the runner they
+     * need is riding inside it as an inert resource (§3). Extracted to the instance root because
+     * that is the folder they already have open, and <strong>never deleted or overwritten</strong>
+     * — an existing jar is theirs, whatever version it is.
+     */
+    private static void extractRunner(String version) {
+        java.nio.file.Path target =
+                net.neoforged.fml.loading.FMLPaths.GAMEDIR
+                        .get()
+                        .resolve("laymark-runner-" + version + ".jar");
+        if (java.nio.file.Files.exists(target)) {
+            LOG.info("Laymark {} loaded; runner already at {}", version, target.getFileName());
+            return;
+        }
+        try (var embedded = LaymarkNeoForge.class.getResourceAsStream("/laymark/runner.jar")) {
+            if (embedded == null) {
+                LOG.warn("Laymark {} has no embedded runner; this is a dev build", version);
+                return;
+            }
+            java.nio.file.Files.copy(embedded, target);
+            LOG.info(
+                    "Laymark {} extracted its runner to {} -- close the game and run it with"
+                            + " java -jar, or double-click it",
+                    version,
+                    target.getFileName());
+        } catch (java.io.IOException e) {
+            LOG.warn("Laymark {} could not extract its runner", version, e);
+        }
     }
 
     /** @return the live channel, or null when the game was not runner-launched */
