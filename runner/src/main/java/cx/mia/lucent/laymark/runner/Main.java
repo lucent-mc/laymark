@@ -175,12 +175,9 @@ public final class Main {
                     Path.of("benchmark-results").resolve(runId).toAbsolutePath();
             RunPlan plan = readConfig(choice.config()).resolve(runId, outputDirectory.toString());
 
-            var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(
-                    choice.instance().gameDirectory());
-            // The baseline is the pack with every candidate withheld, so each arm reads as "with
-            // it" against "without it" rather than against the pack as it happened to be found.
-            var floor = new java.util.TreeSet<>(mods.read().enabledNames());
-            floor.removeAll(choice.candidates());
+            // The roster says it outright: baseline mods load in every arm, candidates load only in
+            // their own, and anything installed but named neither is withheld for the whole run.
+            var floor = choice.baseline();
 
             var baseline =
                     new cx.mia.lucent.laymark.core.experiment.Arm(
@@ -215,7 +212,9 @@ public final class Main {
                     choice.instance(),
                     plan,
                     arms,
-                    choice.candidates(),
+                    // Baseline mods are participants too. Passing only the candidates would make
+                    // every arm enable mods it does not own, which materialisation rejects.
+                    choice.participants(),
                     outputDirectory,
                     choice.config().toAbsolutePath().getParent(),
                     Duration.ofSeconds(900),

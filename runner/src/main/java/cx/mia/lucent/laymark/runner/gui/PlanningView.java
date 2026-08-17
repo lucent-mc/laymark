@@ -3,6 +3,7 @@ package cx.mia.lucent.laymark.runner.gui;
 import cx.mia.lucent.laymark.core.experiment.Schedule;
 import cx.mia.lucent.laymark.runner.launch.InstalledVersion;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
+import cx.mia.lucent.laymark.runner.materialize.InlayIndex;
 import cx.mia.lucent.laymark.runner.materialize.ModsDirectory;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -14,20 +15,22 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Stream;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ButtonGroup;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
 import javax.swing.SpinnerNumberModel;
 
 /**
@@ -51,7 +54,22 @@ public final class PlanningView extends JPanel {
      * to write. Pose, preset, phases and stop condition all live in that file.
      */
     public record Choice(
-            ModrinthInstance instance, Set<String> candidates, Path config, Schedule schedule) {}
+            ModrinthInstance instance,
+            Set<String> baseline,
+            Set<String> candidates,
+            Path config,
+            Schedule schedule) {
+
+        /**
+         * Every mod Laymark takes charge of. Anything installed and not named here is withheld for
+         * the whole run rather than merely disabled, so {@code mods/} holds only what took part.
+         */
+        public Set<String> participants() {
+            Set<String> all = new TreeSet<>(baseline);
+            all.addAll(candidates);
+            return all;
+        }
+    }
 
     private static final String NO_VERSION = "— pick one —";
     private static final String VERSION_KEY = "version.";
@@ -85,7 +103,7 @@ public final class PlanningView extends JPanel {
 
     private final JPanel modList = new JPanel();
     private final JLabel modCount = Theme.muted("");
-    private final Map<String, JCheckBox> mods = new LinkedHashMap<>();
+    private final Map<String, RoleControl> roles = new LinkedHashMap<>();
     private final Path root;
     private final String hereProfile;
 
@@ -187,23 +205,114 @@ public final class PlanningView extends JPanel {
     }
 
     private JPanel candidatesCard() {
-        JPanel card = Theme.card("Candidates");
+        JPanel card = Theme.card("Mods");
         modList.setLayout(new BoxLayout(modList, BoxLayout.Y_AXIS));
         modList.setOpaque(false);
 
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-        header.add(
-                Theme.muted("Check a mod to measure the pack with it against the pack without it."),
+        JPanel legend = new JPanel(new BorderLayout());
+        legend.setOpaque(false);
+        legend.add(
+                Theme.muted(
+                        "baseline — loaded in every arm   ·   candidate — its own arm, measured"
+                                + " against the baseline   ·   off — withheld for the whole run"),
                 BorderLayout.WEST);
-        header.add(modCount, BorderLayout.EAST);
+        legend.add(modCount, BorderLayout.EAST);
 
         JPanel body = new JPanel(new BorderLayout(0, 8));
         body.setOpaque(false);
-        body.add(header, BorderLayout.NORTH);
+        body.add(presets(), BorderLayout.NORTH);
         body.add(Theme.scroll(modList), BorderLayout.CENTER);
+        body.add(legend, BorderLayout.SOUTH);
         card.add(body, BorderLayout.CENTER);
         return card;
+    }
+
+    /**
+     * The two questions people actually ask, as one click each.
+     *
+     * <p>They are presets over the roster rather than a mode the run carries, because the roster is
+     * the real thing: any assignment reachable by a preset is also reachable by hand, and a mode
+     * would be a second way to say something the roster already says.
+     */
+    private JPanel presets() {
+        JButton minusCandidates = Theme.button("Baseline: pack minus candidates", false);
+        minusCandidates.setToolTipText(
+                "Everything installed stays in the baseline except the candidates. Answers:"
+                        + " what does this mod add to the pack as it stands?");
+        minusCandidates.addActionListener(unused -> assignAll(Role.BASELINE));
+
+        JButton parentPack = Theme.button("Baseline: the pack this was built from", false);
+        parentPack.setToolTipText(
+                "Everything this Inlay layer adds is withheld, so candidates are measured against"
+                        + " the pack underneath. Vanilla when there is no inlay.index.json.");
+        parentPack.addActionListener(unused -> assignParentPack());
+
+        JPanel row = row();
+        row.add(minusCandidates);
+        row.add(parentPack);
+        return row;
+    }
+
+    /** Leaves candidates alone: a preset changes what they are measured against, not what they are. */
+    private void assignAll(Role role) {
+        roles.forEach(
+                (name, control) -> {
+                    if (control.role() != Role.CANDIDATE) {
+                        control.set(role);
+                    }
+                });
+        updateCount();
+    }
+
+    private void assignParentPack() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            return;
+        }
+        Set<String> added = InlayIndex.addedMods(root.resolve("profiles").resolve(profile));
+        roles.forEach(
+                (name, control) -> {
+                    if (control.role() == Role.CANDIDATE) {
+                        return;
+                    }
+                    // No index means no recorded ancestor, so nothing here is known to be inherited
+                    // and the pack underneath is vanilla.
+                    control.set(added == null || added.contains(name) ? Role.OFF : Role.BASELINE);
+                });
+        updateCount();
+        warnIfIndexIsStale(added);
+    }
+
+    /**
+     * An index that no longer describes {@code mods/} produces a wrong baseline, quietly.
+     *
+     * <p>It matches by file name, so a mod updated since the index was written looks like something
+     * the layer never added and stays in the baseline — the arm then measures a candidate against a
+     * stack that still contains part of the layer. Nothing downstream can detect that, which is why
+     * it is said here rather than assumed away.
+     */
+    private void warnIfIndexIsStale(Set<String> added) {
+        if (added == null) {
+            return;
+        }
+        Set<String> unmatched = new TreeSet<>(added);
+        unmatched.removeAll(roles.keySet());
+        if (unmatched.isEmpty()) {
+            return;
+        }
+        javax.swing.JOptionPane.showMessageDialog(
+                this,
+                unmatched.size()
+                        + " mod(s) named by "
+                        + InlayIndex.FILE_NAME
+                        + " are not installed under that name — most likely updated since the index"
+                        + " was written:\n\n  "
+                        + String.join("\n  ", unmatched)
+                        + "\n\nTheir installed versions stayed in the baseline. Set them to off by"
+                        + " hand, or refresh the index, or the candidates are measured against a"
+                        + " stack that still contains part of this layer.",
+                "The index does not match mods/",
+                javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 
     private static JPanel row() {
@@ -214,23 +323,82 @@ public final class PlanningView extends JPanel {
 
     private void reloadMods() {
         modList.removeAll();
-        mods.clear();
+        roles.clear();
         String profile = (String) profiles.getSelectedItem();
         if (profile != null) {
             for (String name : installed(root.resolve("profiles").resolve(profile))) {
-                JCheckBox box = new JCheckBox(name.replaceFirst("\\.jar$", ""));
-                box.setOpaque(false);
-                box.setForeground(Theme.TEXT);
-                box.setAlignmentX(Component.LEFT_ALIGNMENT);
-                box.addActionListener(unused -> updateCount());
-                mods.put(name, box);
-                modList.add(box);
+                RoleControl control = new RoleControl(name, this::updateCount);
+                roles.put(name, control);
+                modList.add(control);
             }
         }
         modList.add(Box.createVerticalGlue());
         updateCount();
         revalidate();
         repaint();
+    }
+
+    /** What one mod is doing in this experiment. */
+    private enum Role {
+        OFF,
+        BASELINE,
+        CANDIDATE
+    }
+
+    /** One mod's row: its name, and the three things it can be. */
+    private static final class RoleControl extends JPanel {
+
+        private final Map<Role, JToggleButton> buttons = new LinkedHashMap<>();
+
+        RoleControl(String fileName, Runnable onChange) {
+            setLayout(new BorderLayout(8, 0));
+            setOpaque(false);
+            setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 0, 2, 6));
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+            setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            JLabel name = new JLabel(fileName.replaceFirst("\\.jar$", ""));
+            name.setForeground(Theme.TEXT);
+
+            ButtonGroup group = new ButtonGroup();
+            JPanel choices = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+            choices.setOpaque(false);
+            for (Role role : Role.values()) {
+                JToggleButton button = new JToggleButton(label(role));
+                button.setFocusPainted(false);
+                button.addActionListener(unused -> onChange.run());
+                group.add(button);
+                buttons.put(role, button);
+                choices.add(button);
+            }
+            // Baseline by default: an unconfigured roster describes the pack as it is installed,
+            // which is the only assignment that measures nothing until someone asks a question.
+            buttons.get(Role.BASELINE).setSelected(true);
+
+            add(name, BorderLayout.WEST);
+            add(choices, BorderLayout.EAST);
+        }
+
+        private static String label(Role role) {
+            return switch (role) {
+                case OFF -> "off";
+                case BASELINE -> "baseline";
+                case CANDIDATE -> "candidate";
+            };
+        }
+
+        Role role() {
+            for (Map.Entry<Role, JToggleButton> entry : buttons.entrySet()) {
+                if (entry.getValue().isSelected()) {
+                    return entry.getKey();
+                }
+            }
+            return Role.BASELINE;
+        }
+
+        void set(Role role) {
+            buttons.get(role).setSelected(true);
+        }
     }
 
     /**
@@ -279,14 +447,48 @@ public final class PlanningView extends JPanel {
     }
 
     private void updateCount() {
-        modCount.setText(selected().size() + " of " + mods.size() + " selected");
+        modCount.setText(
+                String.format(
+                        Locale.ROOT,
+                        "%d baseline · %d candidates · %d off",
+                        named(Role.BASELINE).size(),
+                        named(Role.CANDIDATE).size(),
+                        named(Role.OFF).size()));
     }
 
+    /**
+     * The installed mods an operator may assign, which excludes Laymark's own.
+     *
+     * <p>The harness has to load in every arm — it is what produces the measurements — so offering
+     * it as a candidate offers a run that cannot report anything, and offering it as "off" offers
+     * one that cannot start. It is added to the baseline in {@link #choice()} instead.
+     */
     private Set<String> installed(Path gameDirectory) {
         if (!Files.isDirectory(gameDirectory)) {
             return Set.of();
         }
-        return new TreeSet<>(new ModsDirectory(gameDirectory).read().enabledNames());
+        Set<String> names = new TreeSet<>(new ModsDirectory(gameDirectory).read().enabledNames());
+        names.removeIf(PlanningView::isHarness);
+        return names;
+    }
+
+    private static boolean isHarness(String fileName) {
+        return fileName.toLowerCase(Locale.ROOT).startsWith("laymark-");
+    }
+
+    /** Every installed mod, including the harness, so it can be put back in the baseline. */
+    private Set<String> harnessMods() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            return Set.of();
+        }
+        Path gameDirectory = root.resolve("profiles").resolve(profile);
+        if (!Files.isDirectory(gameDirectory)) {
+            return Set.of();
+        }
+        Set<String> names = new TreeSet<>(new ModsDirectory(gameDirectory).read().enabledNames());
+        names.removeIf(name -> !isHarness(name));
+        return names;
     }
 
     private static List<String> directories(Path parent) {
@@ -302,11 +504,11 @@ public final class PlanningView extends JPanel {
         }
     }
 
-    Set<String> selected() {
+    private Set<String> named(Role role) {
         Set<String> chosen = new TreeSet<>();
-        mods.forEach(
-                (name, box) -> {
-                    if (box.isSelected()) {
+        roles.forEach(
+                (name, control) -> {
+                    if (control.role() == role) {
                         chosen.add(name);
                     }
                 });
@@ -320,7 +522,7 @@ public final class PlanningView extends JPanel {
         if (profile == null
                 || version == null
                 || NO_VERSION.equals(version)
-                || selected().isEmpty()
+                || named(Role.CANDIDATE).isEmpty()
                 || !Files.isRegularFile(configPath())) {
             return null;
         }
@@ -332,8 +534,14 @@ public final class PlanningView extends JPanel {
         }
         PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
         PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue());
+        Set<String> baseline = named(Role.BASELINE);
+        baseline.addAll(harnessMods());
         return new Choice(
-                new ModrinthInstance(root, profile, version), selected(), configPath(), parsed);
+                new ModrinthInstance(root, profile, version),
+                baseline,
+                named(Role.CANDIDATE),
+                configPath(),
+                parsed);
     }
 
     private Schedule schedule() {
@@ -372,7 +580,7 @@ public final class PlanningView extends JPanel {
         } catch (RuntimeException e) {
             return e.getMessage();
         }
-        return "Check at least one mod to benchmark.";
+        return "Mark at least one mod as a candidate. A run with none compares nothing.";
     }
 
     @Override
