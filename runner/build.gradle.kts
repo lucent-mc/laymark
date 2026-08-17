@@ -13,6 +13,10 @@ dependencies {
     implementation(libs.flatlaf)
 }
 
+// The plain jar steps aside: without the classifier it and runnerJar write the SAME file, and
+// whichever ran last won -- a collision Gradle 9 turns from a silent hazard into an error.
+tasks.jar { archiveClassifier = "thin" }
+
 // The artifact §3 describes: one file, `java -jar`, no start script and no lib directory. It is
 // also what makes the planning window reachable by double-clicking, so it is built by `assemble`
 // rather than on request.
@@ -44,6 +48,15 @@ val runnerJar =
     }
 
 tasks.named("assemble") { dependsOn(runnerJar) }
+
+// The application plugin's script/distribution tasks scan build/libs, where runnerJar also
+// writes. Gradle's validation rightly refuses an undeclared producer-consumer overlap -- without
+// the ordering, a distribution could package a stale runner jar depending on execution order.
+// Named explicitly rather than withType: Jar extends Zip, so a type-wide rule would make
+// runnerJar depend on itself.
+listOf("startScripts", "installDist", "distZip", "distTar").forEach { name ->
+    tasks.named(name) { dependsOn(runnerJar) }
+}
 
 // The runner assembles launch commands for a mod loader, so loader names appear throughout its
 // data: a descriptor's mainClass, and library paths like net/neoforged/neoforge/...-universal.jar.
