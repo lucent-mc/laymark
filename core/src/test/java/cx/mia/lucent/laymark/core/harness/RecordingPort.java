@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.core.harness;
 
+import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -96,12 +97,15 @@ final class RecordingPort implements HarnessPort {
                     8.1,
                     2.2,
                     5.6,
-                    10_000,
+                    500,
                     List.of(new SparkStatistics.GcActivity("G1 Young Generation", 4, 21)));
 
+    StopCondition lastStop;
+
     @Override
-    public Measurement capture(Duration duration) {
+    public Measurement capture(StopCondition stop) {
         record("capture");
+        lastStop = stop;
         List<FrameSample> samples = new ArrayList<>();
         List<GpuSample> gpu = new ArrayList<>();
         for (int i = 0; i < framesPerCapture; i++) {

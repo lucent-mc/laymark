@@ -1,6 +1,7 @@
 package cx.mia.lucent.laymark.core.harness;
 
 import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
+import cx.mia.lucent.laymark.core.plan.StopCondition;
 import java.time.Duration;
 import java.util.List;
 
@@ -86,10 +87,15 @@ public interface HarnessPort {
      * Records every channel for the given duration and returns the raw series.
      *
      * <p>All channels, always. Deciding per scenario which ones to open would save nothing worth
-     * having — they are field reads on hot paths that already exist — and would guarantee that the
-     * one run nobody thought to instrument is the one that turns out to matter.
+     * having -- they are field reads on hot paths that already exist -- and would guarantee that
+     * the one run nobody thought to instrument is the one that turns out to matter.
+     *
+     * <p>Takes the whole stop condition rather than a duration because two of the three kinds end
+     * on the game making progress, which only the implementation can observe.
+     *
+     * @throws HarnessException if the target is not reached within the condition's timeout
      */
-    Measurement capture(Duration duration);
+    Measurement capture(StopCondition stop);
 
     /**
      * Saves and leaves the world, releasing its lock.

@@ -77,6 +77,33 @@ public record Measurement(
         return total / 1_000_000d / delta.clientChunks();
     }
 
+    /**
+     * How long the capture window actually was, derived from the frames it caught.
+     *
+     * <p>Derived rather than recorded because it has to be the span the samples came from, not the
+     * span someone intended. A frame- or chunk-targeted capture ends when its target is met, so
+     * its length is only known afterwards.
+     */
+    public long captureMillis() {
+        if (frames.isEmpty()) {
+            return 0;
+        }
+        FrameSample last = frames.get(frames.size() - 1);
+        return (last.offsetNanos() + last.intervalNanos()) / 1_000_000L;
+    }
+
+    /**
+     * Whether Spark's rolling window is wider than the capture it is reported against.
+     *
+     * <p>When it is, the server statistics include time from before the capture — world creation
+     * and the previous scenario's teardown — and describe something other than the scenario they
+     * are printed beneath. Observed on a real run: a 4.7s capture reported a 10s window, and its
+     * server mean read twice that of an otherwise identical 10s capture.
+     */
+    public boolean serverWindowOverrunsCapture() {
+        return spark != null && captureMillis() > 0 && spark.windowMillis() > captureMillis();
+    }
+
     /** Every distinct reason the framerate was held back, in the order first seen. */
     public List<Throttle> throttlesObserved() {
         return frames.stream().map(FrameSample::throttle).distinct().toList();

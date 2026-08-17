@@ -12,6 +12,7 @@ import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
 import cx.mia.lucent.laymark.core.harness.WorldSpec;
+import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.harness.BarrierReport;
 import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.io.IOException;
@@ -321,7 +322,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
     }
 
     @Override
-    public Measurement capture(Duration duration) {
+    public Measurement capture(StopCondition stop) {
         String throttled = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
         if (throttled != null) {
             // Refused up front rather than flagged. A window that starts throttled is capped for
@@ -344,7 +345,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     recorder.start();
                 });
 
-        ClientThread.sleep(duration);
+        awaitStop(stop, workBefore);
 
         List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
         List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
@@ -356,6 +357,50 @@ public final class MinecraftHarnessPort implements HarnessPort {
         return new Measurement(
                 frames, gpu, sparkStatistics, workBefore, workAfter, memoryBefore, memoryAfter);
     }
+
+    /**
+     * Blocks until the capture's target is reached.
+     *
+     * <p>A duration capture just waits. The other two poll, because they end on the game making
+     * progress — which is exactly what a broken stack fails to do, hence the timeout. Reaching the
+     * timeout <strong>fails</strong> the repetition rather than returning what was collected: a
+     * short capture and a completed one are not the same measurement, and silently substituting
+     * one for the other would put the arms on different workloads.
+     */
+    private void awaitStop(StopCondition stop, WorkCounters workBefore) {
+        if (stop.kind() == StopCondition.Kind.TIME) {
+            ClientThread.sleep(stop.duration());
+            return;
+        }
+
+        long deadline = System.nanoTime() + stop.timeout().toNanos();
+        while (System.nanoTime() < deadline) {
+            long progress =
+                    switch (stop.kind()) {
+                        case FRAMES -> recorder.sampleCount();
+                        case CHUNKS ->
+                                ClientThread.call("reading work counters", Counters::work)
+                                                .clientChunks()
+                                        - workBefore.clientChunks();
+                        case TIME -> throw new IllegalStateException("handled above");
+                    };
+            if (progress >= stop.target()) {
+                return;
+            }
+            ClientThread.sleep(PROGRESS_POLL);
+        }
+        throw new HarnessException(
+                "capture did not reach "
+                        + stop.target()
+                        + " "
+                        + stop.kind()
+                        + " within "
+                        + stop.timeout().toSeconds()
+                        + "s");
+    }
+
+    /** How often to ask whether a completion target has been met. */
+    private static final Duration PROGRESS_POLL = Duration.ofMillis(100);
 
     /** Why the GPU channel is empty, or null when it worked. Reported as a run-level flag. */
     public String gpuUnavailableReason() {

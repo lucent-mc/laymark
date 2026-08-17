@@ -2,17 +2,9 @@ package cx.mia.lucent.laymark.core.plan;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonDeserializationContext;
-import com.google.gson.JsonDeserializer;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
-import com.google.gson.JsonSerializationContext;
-import com.google.gson.JsonSerializer;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
-import java.lang.reflect.Type;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import cx.mia.lucent.laymark.core.json.StrictEnum;
 
 /**
  * Reads and writes {@link RunPlan} as JSON.
@@ -22,65 +14,25 @@ import java.util.Map;
  * only interpretable alongside the plan that produced it. That makes round-tripping the whole
  * point of this type, not an incidental capability.
  *
- * <p>Two things reflection alone gets wrong here, both of which fail at read time rather than
- * write time — the worst place for a benchmark to discover a problem:
- *
- * <ol>
- *   <li>{@link StopCondition} is a sealed interface. Reflection writes the variant's fields with
- *       no discriminator and then cannot decide what to build. So variants carry an explicit
- *       {@code kind}, dispatched through a registry, the same shape {@code FrameCodec} uses.
- *   <li>Gson invokes a record's canonical constructor but rewraps whatever it throws. A plan
+" * <p>One thing reflection gets wrong here, and it fails at read time rather than write time --
+ * the worst place for a benchmark to discover a problem: Gson invokes a record's canonical constructor but rewraps whatever it throws. A plan
  *       whose scenarios contain a cycle would surface as a bare runtime exception rather than a
  *       {@link PlanException}, slipping past every {@code catch (PlanException)} the callers are
- *       written around. Validation failures are unwrapped back to what they were.
- * </ol>
+ *  written around. Validation failures are unwrapped back to what they were.
  */
 public final class PlanCodec {
 
     private PlanCodec() {}
 
-    private static final String KIND = "kind";
-
-    private static final Map<String, Class<? extends StopCondition>> BY_NAME =
-            new LinkedHashMap<>();
-    private static final Map<Class<? extends StopCondition>, String> BY_CLASS =
-            new LinkedHashMap<>();
-
-    private static void register(String name, Class<? extends StopCondition> type) {
-        BY_NAME.put(name, type);
-        BY_CLASS.put(type, name);
-    }
-
-    static {
-        register("fixed-duration", StopCondition.FixedDuration.class);
-        register("until-complete", StopCondition.UntilComplete.class);
-    }
-
-    /** Every registered discriminator, so a test can assert the registry covers the hierarchy. */
-    public static java.util.Set<String> registeredKinds() {
-        return java.util.Set.copyOf(BY_NAME.keySet());
-    }
-
-    /**
-     * The stop-condition adapter, shared with the scenario config codec.
-     *
-     * <p>Shared rather than duplicated so the shape an operator writes in a config is exactly the
-     * shape that gets archived in the plan beside their results. Two registries would be two
-     * chances for those to drift.
-     */
-    public static Object stopConditionAdapter() {
-        return new StopConditionAdapter();
-    }
-
-    // registerTypeAdapter, not registerTypeHierarchyAdapter. A hierarchy adapter also claims the
-    // concrete variants, so the adapter's own context.serialize(src, src.getClass()) re-enters it
-    // and recurses until the stack dies. Binding to the interface alone lets the variant fall
-    // through to Gson's reflective record handling, which is the whole point of the delegation.
+    // A stop condition is one flat record with an enum kind, so reflection handles it. It used to
+    // be a sealed hierarchy, which needed a discriminator, a hand-kept registry and a custom
+    // adapter to express what turned out to be a difference of unit.
     private static final Gson GSON =
             new GsonBuilder()
                     .setPrettyPrinting()
                     .disableHtmlEscaping()
-                    .registerTypeAdapter(StopCondition.class, new StopConditionAdapter())
+                    .registerTypeAdapter(
+                            StopCondition.Kind.class, StrictEnum.of(StopCondition.Kind.class))
                     .create();
 
     /** Pretty-printed, because a human diagnosing a run reads this file. */
@@ -128,46 +80,4 @@ public final class PlanCodec {
         return new PlanException(fallback + ": " + thrown.getMessage());
     }
 
-    private static final class StopConditionAdapter
-            implements JsonSerializer<StopCondition>, JsonDeserializer<StopCondition> {
-
-        @Override
-        public JsonElement serialize(
-                StopCondition src, Type type, JsonSerializationContext context) {
-            String name = BY_CLASS.get(src.getClass());
-            if (name == null) {
-                throw new PlanException(
-                        "unregistered stop condition " + src.getClass().getName()
-                                + "; add it to PlanCodec's registry");
-            }
-            JsonObject out = new JsonObject();
-            out.addProperty(KIND, name);
-            context.serialize(src, src.getClass())
-                    .getAsJsonObject()
-                    .entrySet()
-                    .forEach(e -> out.add(e.getKey(), e.getValue()));
-            return out;
-        }
-
-        @Override
-        public StopCondition deserialize(
-                JsonElement json, Type type, JsonDeserializationContext context) {
-            if (!json.isJsonObject()) {
-                throw new PlanException("stop condition must be an object, got " + json);
-            }
-            JsonElement kind = json.getAsJsonObject().get(KIND);
-            if (kind == null || !kind.isJsonPrimitive() || !kind.getAsJsonPrimitive().isString()) {
-                throw new PlanException(
-                        "stop condition has no string '" + KIND + "'; known kinds are "
-                                + BY_NAME.keySet());
-            }
-            Class<? extends StopCondition> variant = BY_NAME.get(kind.getAsString());
-            if (variant == null) {
-                throw new PlanException(
-                        "unknown stop condition '" + kind.getAsString() + "'; known kinds are "
-                                + BY_NAME.keySet());
-            }
-            return context.deserialize(json, variant);
-        }
-    }
 }

@@ -27,14 +27,26 @@ class PlanCodecTest {
             """;
 
     static Stream<StopCondition> everyStopCondition() {
-        return Stream.of(
-                new StopCondition.FixedDuration(45_000),
-                new StopCondition.UntilComplete("all-chunks-loaded", 600_000));
+        return Stream.of(StopCondition.Kind.values())
+                .map(kind -> new StopCondition(kind, 512, 600_000));
     }
 
     private static RunPlan planWith(StopCondition stopCondition) {
-        return RunPlan.of(
-                "run-abc", "out/experiments", List.of(ScenarioSpec.of("s1", stopCondition)));
+        // Traversal rather than the default phase: it is the one compatible with every kind,
+        // since a chunk target needs a phase where chunks actually arrive.
+        ScenarioSpec scenario =
+                new ScenarioSpec(
+                        "s1",
+                        List.of(),
+                        stopCondition,
+                        1,
+                        cx.mia.lucent.laymark.core.harness.Preset.defaults(),
+                        cx.mia.lucent.laymark.core.harness.Pose.lookingDown(0.5, 200, 0.5),
+                        0L,
+                        cx.mia.lucent.laymark.core.Phase.UNGENERATED_TRAVERSAL,
+                        false,
+                        List.of());
+        return RunPlan.of("run-abc", "out/experiments", List.of(scenario));
     }
 
     @ParameterizedTest
@@ -44,51 +56,15 @@ class PlanCodecTest {
         assertEquals(original, PlanCodec.read(PlanCodec.write(original)));
     }
 
-    /**
-     * The registry is hand-maintained. A variant added without registering it would write fine
-     * and fail on read -- and the read happens in the game, after a launch has been paid for.
-     */
-    @Test
-    void registryCoversEverySealedVariant() {
-        var unregistered =
-                Stream.of(StopCondition.class.getPermittedSubclasses())
-                        .filter(
-                                type ->
-                                        everyStopCondition()
-                                                .noneMatch(s -> s.getClass().equals(type)))
-                        .map(Class::getSimpleName)
-                        .toList();
-        assertTrue(
-                unregistered.isEmpty(),
-                "stop conditions with no round-trip coverage: " + unregistered);
-    }
-
-    @Test
-    void writesADiscriminator() {
-        String json = PlanCodec.write(planWith(new StopCondition.FixedDuration(1000)));
-        assertTrue(json.contains("\"kind\""), json);
-        assertTrue(json.contains("fixed-duration"), json);
-    }
-
+    /** A kind is a plain enum now, so an unknown one fails at parse and names the valid set. */
     @Test
     void rejectsUnknownStopConditionKind() {
         String json =
-                PlanCodec.write(planWith(new StopCondition.FixedDuration(1000)))
-                        .replace("fixed-duration", "until-the-heat-death");
+                PlanCodec.write(planWith(new StopCondition(StopCondition.Kind.TIME, 1000, 2000)))
+                        .replace("TIME", "UNTIL_THE_HEAT_DEATH");
         PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(json));
-        assertTrue(e.getMessage().contains("until-the-heat-death"), e.getMessage());
-        assertTrue(e.getMessage().contains("known kinds"), "the error should say what is valid");
-    }
-
-    @Test
-    void rejectsMissingDiscriminator() {
-        String json =
-                """
-                {"runId":"r","protocolVersion":1,"outputDirectory":"o",
-                 "scenarios":[{"id":"s","dependsOn":[],"repetitions":1,
-                 "stopCondition":{"millis":1000}}]}
-                """;
-        assertThrows(PlanException.class, () -> PlanCodec.read(json));
+        assertTrue(e.getMessage().contains("UNTIL_THE_HEAT_DEATH"), e.getMessage());
+        assertTrue(e.getMessage().contains("TIME"), "the error should say what is valid");
     }
 
     /**
@@ -104,9 +80,9 @@ class PlanCodecTest {
                 """
                 {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
                   {"id":"a","dependsOn":["b"],"repetitions":1,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000},PRESET},
+                   "stopCondition":{"kind":"TIME","target":1000,"timeoutMillis":2000},PRESET},
                   {"id":"b","dependsOn":["a"],"repetitions":1,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000},PRESET}]}
+                   "stopCondition":{"kind":"TIME","target":1000,"timeoutMillis":2000},PRESET}]}
                 """
                         .replace("PRESET", PRESET_AND_POSE);
         PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(cyclic));
@@ -119,7 +95,7 @@ class PlanCodecTest {
                 """
                 {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
                   {"id":"s","dependsOn":[],"repetitions":1,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000}}]}
+                   "stopCondition":{"kind":"TIME","target":1000,"timeoutMillis":2000}}]}
                 """;
         PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(json));
         assertTrue(e.getMessage().contains("preset"), e.getMessage());
@@ -136,7 +112,7 @@ class PlanCodecTest {
                 """
                 {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
                   {"id":"s","dependsOn":[],"repetitions":1,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000},PRESET}]}
+                   "stopCondition":{"kind":"TIME","target":1000,"timeoutMillis":2000},PRESET}]}
                 """
                         .replace("PRESET", PRESET_AND_POSE)
                         .replace("\"renderDistance\":12", "\"renderDistance\":900");
@@ -150,7 +126,7 @@ class PlanCodecTest {
                 """
                 {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
                   {"id":"s","dependsOn":[],"repetitions":0,
-                   "stopCondition":{"kind":"fixed-duration","millis":1000}}]}
+                   "stopCondition":{"kind":"TIME","target":1000,"timeoutMillis":2000}}]}
                 """;
         PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(json));
         assertTrue(e.getMessage().contains("repetition"), e.getMessage());
@@ -162,8 +138,7 @@ class PlanCodecTest {
                 """
                 {"runId":"r","protocolVersion":1,"outputDirectory":"o","scenarios":[
                   {"id":"s","dependsOn":[],"repetitions":1,
-                   "stopCondition":{"kind":"until-complete","target":"all-chunks-loaded",
-                    "timeoutMillis":0}}]}
+                   "stopCondition":{"kind":"CHUNKS","target":512,"timeoutMillis":0}}]}
                 """;
         PlanException e = assertThrows(PlanException.class, () -> PlanCodec.read(json));
         assertTrue(e.getMessage().contains("timeout"), e.getMessage());

@@ -108,6 +108,13 @@ public final class FrameRecorder {
         recording.set(true);
     }
 
+    /** How many samples the open window holds, for a capture that ends on a frame count. */
+    public int sampleCount() {
+        synchronized (lock) {
+            return samples.size();
+        }
+    }
+
     /** Closes the window and returns everything it caught. */
     public List<FrameSample> stop() {
         recording.set(false);

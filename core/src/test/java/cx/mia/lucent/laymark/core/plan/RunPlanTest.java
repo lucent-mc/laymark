@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class RunPlanTest {
 
     private static ScenarioSpec spec(String id, String... dependsOn) {
-        return new ScenarioSpec(id, List.of(dependsOn), new StopCondition.FixedDuration(1_000), 1);
+        return new ScenarioSpec(id, List.of(dependsOn), new StopCondition(StopCondition.Kind.TIME, 1_000, 0), 1);
     }
 
     private static RunPlan planOf(ScenarioSpec... scenarios) {

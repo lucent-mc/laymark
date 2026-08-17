@@ -35,7 +35,7 @@ class ScenarioConfigTest {
         assertEquals(1, only.repetitions());
         assertEquals(Phase.RESIDENT_RENDER, only.phase());
         assertEquals(Preset.defaults(), only.preset());
-        assertTrue(only.stopCondition() instanceof StopCondition.FixedDuration);
+        assertTrue(only.stopCondition().kind() == StopCondition.Kind.TIME);
     }
 
     /**
@@ -157,7 +157,7 @@ class ScenarioConfigTest {
                         "traversal",
                         List.of(),
                         Phase.UNGENERATED_TRAVERSAL,
-                        new StopCondition.UntilComplete("chunks", 120_000),
+                        StopSpec.of(StopCondition.Kind.CHUNKS, 512, 120_000),
                          3,
                         null,
                         Pose.lookingDown(2048.5, 500, 2048.5),

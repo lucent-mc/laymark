@@ -44,7 +44,7 @@ class ConfigCodecTest {
                                         "traversal",
                                         List.of(),
                                         Phase.UNGENERATED_TRAVERSAL,
-                                        new StopCondition.UntilComplete("chunks", 120_000),
+                                        StopSpec.of(StopCondition.Kind.CHUNKS, 512, 120_000),
                                          3,
                                         PresetRef.named("low"),
                                         null,
@@ -61,22 +61,22 @@ class ConfigCodecTest {
         String json =
                 """
                 {"version":1,"scenarios":[{"id":"s",
-                 "stop":{"kind":"until-complete","target":"chunks","timeoutMillis":60000}}]}
+                 "stop":{"kind":"CHUNKS","target":512,"timeout":60000}}]}
                 """;
         ScenarioConfig config = ConfigCodec.read(json);
-        assertTrue(config.scenarios().get(0).stop() instanceof StopCondition.UntilComplete);
-        assertTrue(ConfigCodec.write(config).contains("until-complete"));
+        assertTrue(config.scenarios().get(0).stop().kind() == StopCondition.Kind.CHUNKS);
+        assertTrue(ConfigCodec.write(config).contains("CHUNKS"));
     }
 
     @Test
     void rejectsAnUnknownStopConditionAndSaysWhatIsValid() {
         String json =
                 """
-                {"version":1,"scenarios":[{"id":"s","stop":{"kind":"when-i-say-so"}}]}
+                {"version":1,"scenarios":[{"id":"s","stop":{"kind":"when-i-say-so","target":1}}]}
                 """;
         PlanException e = assertThrows(PlanException.class, () -> ConfigCodec.read(json));
         assertTrue(e.getMessage().contains("when-i-say-so"), e.getMessage());
-        assertTrue(e.getMessage().contains("known kinds"), e.getMessage());
+        assertTrue(e.getMessage().contains("TIME"), "the error should name the valid kinds");
     }
 
     /** An unknown phase name must fail loudly, not silently become the default one. */

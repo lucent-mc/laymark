@@ -26,7 +26,7 @@ class HarnessRunTest {
         return new ScenarioSpec(
                 id,
                 List.of(),
-                new StopCondition.FixedDuration(5_000),
+                new StopCondition(StopCondition.Kind.TIME, 5_000, 0),
                 repetitions,
                 Preset.defaults(),
                 Pose.lookingDown(100.5, 120, -64.5),
@@ -150,6 +150,43 @@ class HarnessRunTest {
         assertTrue(only.measured(), "throttled samples are still samples, just qualified ones");
     }
 
+    /**
+     * Spark reports a rolling window. A capture shorter than it gets server numbers that partly
+     * describe world creation -- observed on a real run as a doubled server mean.
+     */
+    @Test
+    void flagsServerStatisticsWiderThanTheCaptureTheyDescribe() {
+        port.framesPerCapture = 10; // ~80ms of frames against Spark's 10s window
+
+        ScenarioResult only = run(scenario("short", 1)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.COMPLETED_WITH_FLAGS, only.outcome());
+        assertTrue(
+                only.flags().toString().contains("include time from before it"),
+                only.flags().toString());
+    }
+
+    /** A chunk target in a phase that loads no chunks can never complete; catch it at parse. */
+    @Test
+    void refusesAChunkTargetOnTheResidentRenderPhase() {
+        cx.mia.lucent.laymark.core.plan.PlanException e =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        cx.mia.lucent.laymark.core.plan.PlanException.class,
+                        () ->
+                                new ScenarioSpec(
+                                        "impossible",
+                                        List.of(),
+                                        new StopCondition(StopCondition.Kind.CHUNKS, 289, 60_000),
+                                        1,
+                                        Preset.defaults(),
+                                        Pose.lookingDown(0.5, 200, 0.5),
+                                        1L,
+                                        Phase.RESIDENT_RENDER,
+                                        false,
+                                        List.of()));
+        assertTrue(e.getMessage().contains("never be reached"), e.getMessage());
+    }
+
     /** Every channel reaches the result, whatever the scenario asked to be scored on. */
     @Test
     void recordsEveryChannelNotJustTheScoredOne() {
@@ -166,7 +203,7 @@ class HarnessRunTest {
         return new ScenarioSpec(
                 id,
                 List.of(),
-                new StopCondition.FixedDuration(5_000),
+                new StopCondition(StopCondition.Kind.TIME, 5_000, 0),
                 1,
                 Preset.defaults(),
                 Pose.lookingDown(0.5, 200, 0.5),
@@ -234,7 +271,7 @@ class HarnessRunTest {
                 new ScenarioSpec(
                         "scene",
                         List.of(),
-                        new StopCondition.FixedDuration(1_000),
+                        new StopCondition(StopCondition.Kind.TIME, 1_000, 0),
                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 200, 0.5),
@@ -293,27 +330,26 @@ class HarnessRunTest {
         assertTrue(result.flags().get(0).contains("save is locked"), result.flags().toString());
     }
 
-    /** Better a legible refusal than a number answering a question nobody asked. */
+    /** The stop condition reaches the port whole, since two kinds end on the game progressing. */
     @Test
-    void refusesAStopConditionItCannotYetMeasure() {
+    void handsTheWholeStopConditionToThePort() {
         ScenarioSpec chunks =
                 new ScenarioSpec(
                         "load-chunks",
                         List.of(),
-                        new StopCondition.UntilComplete("chunks", 60_000),
-                        1,
+                        new StopCondition(StopCondition.Kind.CHUNKS, 512, 60_000),
+                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
-                        1L,
-                        Phase.RESIDENT_RENDER,
+                         1L,
+                        Phase.UNGENERATED_TRAVERSAL,
                         false,
                         List.of());
 
-        ScenarioResult only = run(chunks).scenarios().get(0);
+        run(chunks);
 
-        assertEquals(ScenarioResult.Outcome.FAILED, only.outcome());
-        assertTrue(only.failureReason().contains("completion target"), only.failureReason());
-        assertFalse(port.calls.contains("capture"), "it must not measure something else instead");
+        assertEquals(StopCondition.Kind.CHUNKS, port.lastStop.kind());
+        assertEquals(512, port.lastStop.target());
     }
 
     @Test
@@ -323,7 +359,7 @@ class HarnessRunTest {
                 new ScenarioSpec(
                         "second",
                         List.of("first"),
-                        new StopCondition.FixedDuration(1_000),
+                        new StopCondition(StopCondition.Kind.TIME, 1_000, 0),
                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),

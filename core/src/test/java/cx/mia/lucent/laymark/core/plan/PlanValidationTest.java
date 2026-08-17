@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
  */
 class PlanValidationTest {
 
-    private static final StopCondition ANY = new StopCondition.FixedDuration(1_000);
+    private static final StopCondition ANY = new StopCondition(StopCondition.Kind.TIME, 1_000, 0);
 
     @Test
     void scenarioSpecRejectionsArePlanExceptions() {
@@ -32,16 +32,21 @@ class PlanValidationTest {
     @Test
     void stopConditionRejectionsArePlanExceptions() {
         assertAll(
-                () -> assertThrows(PlanException.class, () -> new StopCondition.FixedDuration(0)),
+                () -> assertThrows(PlanException.class, () -> new StopCondition(StopCondition.Kind.TIME, 0, 0)),
                 () ->
                         assertThrows(
                                 PlanException.class,
-                                () -> new StopCondition.UntilComplete("", 1_000)),
+                                () -> new StopCondition(null, 1_000, 1_000)),
+                // A time target that cannot finish inside its own ceiling is a contradiction.
+                () ->
+                        assertThrows(
+                                PlanException.class,
+                                () -> new StopCondition(StopCondition.Kind.TIME, 60_000, 1_000)),
                 // A variable stop condition with no ceiling hangs the run instead of failing it.
                 () ->
                         assertThrows(
                                 PlanException.class,
-                                () -> new StopCondition.UntilComplete("chunks", 0)));
+                                () -> new StopCondition(StopCondition.Kind.CHUNKS, 512, 0)));
     }
 
     /**

@@ -176,23 +176,29 @@ public final class HarnessRun {
      * has a ceiling in the middle of it, and only the reader can judge what that is worth.
      */
     private static List<String> throttleFlags(Measurement measurement) {
-        return measurement.throttlesObserved().stream()
-                .filter(throttle -> throttle != Throttle.NONE)
-                .map(throttle -> "framerate was throttled during the capture: " + throttle)
-                .toList();
+        List<String> flags =
+                new ArrayList<>(
+                        measurement.throttlesObserved().stream()
+                                .filter(throttle -> throttle != Throttle.NONE)
+                                .map(t -> "framerate was throttled during the capture: " + t)
+                                .toList());
+
+        if (measurement.serverWindowOverrunsCapture()) {
+            // Spark's statistics are a rolling window, not a capture-scoped aggregate. A capture
+            // shorter than that window reports server numbers that partly describe world creation
+            // and the previous scenario's teardown.
+            flags.add(
+                    "server statistics cover a "
+                            + measurement.spark().windowMillis()
+                            + "ms window but the capture was only "
+                            + measurement.captureMillis()
+                            + "ms, so they include time from before it");
+        }
+        return flags;
     }
 
-    private static Duration captureWindow(ScenarioSpec scenario) {
-        if (scenario.stopCondition() instanceof StopCondition.FixedDuration fixed) {
-            return fixed.duration();
-        }
-        // Completion-targeted scenarios need a channel that reports progress, which arrives with
-        // the measurement channels. Failing the scenario says so; silently capturing for some
-        // default window would produce a number that looks like an answer to a different question.
-        throw new HarnessException(
-                "scenario "
-                        + scenario.id()
-                        + " uses a completion target, which this version cannot yet measure");
+    private static StopCondition captureWindow(ScenarioSpec scenario) {
+        return scenario.stopCondition();
     }
 
     private void discard(WorldSpec world) {

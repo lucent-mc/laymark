@@ -7,7 +7,7 @@ import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.json.StrictEnum;
-import cx.mia.lucent.laymark.core.plan.PlanCodec;
+import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.plan.PlanException;
 
 /**
@@ -33,8 +33,8 @@ public final class ConfigCodec {
                     .setPrettyPrinting()
                     .disableHtmlEscaping()
                     .registerTypeAdapter(
-                            cx.mia.lucent.laymark.core.plan.StopCondition.class,
-                            PlanCodec.stopConditionAdapter())
+                            StopCondition.Kind.class, StrictEnum.of(StopCondition.Kind.class))
+                    .registerTypeAdapter(TargetRef.class, new TargetRefAdapter())
                     .registerTypeAdapter(Phase.class, StrictEnum.of(Phase.class))
                     .registerTypeAdapter(
                             Preset.ParticleDetail.class, StrictEnum.of(Preset.ParticleDetail.class))

@@ -9,6 +9,7 @@ import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
 import cx.mia.lucent.laymark.core.scenario.ScenarioConfig;
 import cx.mia.lucent.laymark.core.scenario.PresetRef;
 import cx.mia.lucent.laymark.core.scenario.ScenarioDefinition;
+import cx.mia.lucent.laymark.core.scenario.StopSpec;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.runner.launch.LaunchException;
@@ -151,7 +152,7 @@ public final class Main {
                         "resident-render",
                         List.of(),
                         Phase.RESIDENT_RENDER,
-                        new StopCondition.FixedDuration(captureMillis),
+                        StopSpec.of(StopCondition.Kind.TIME, captureMillis, 0),
                         Integer.parseInt(options.getOrDefault("repetitions", "1")),
                         PresetRef.inline(preset),
                         Pose.lookingDown(0.5, OBSERVATION_ALTITUDE, 0.5),

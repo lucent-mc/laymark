@@ -30,7 +30,7 @@ public record ScenarioDefinition(
         String id,
         List<String> dependsOn,
         Phase phase,
-        StopCondition stop,
+        StopSpec stop,
         Integer repetitions,
         PresetRef settings,
         Pose pose,
@@ -63,7 +63,7 @@ public record ScenarioDefinition(
         return new ScenarioSpec(
                 id,
                 dependsOn,
-                stop == null ? defaultStop() : stop,
+                stop == null ? defaultStop() : stop.resolve(effective),
                 repetitions == null ? DEFAULT_REPETITIONS : repetitions,
                 effective,
                 pose == null ? defaultPose() : pose,
@@ -81,8 +81,8 @@ public record ScenarioDefinition(
      * phase closely enough that stating it every time would be noise — but the resolved plan
      * records the choice, so nothing is left implicit in the archive.
      */
-    private StopCondition defaultStop() {
-        return new StopCondition.FixedDuration(30_000);
+    private static StopCondition defaultStop() {
+        return StopCondition.time(java.time.Duration.ofSeconds(30));
     }
 
     /** High enough to be clear of terrain at any elevation vanilla generates, looking down. */

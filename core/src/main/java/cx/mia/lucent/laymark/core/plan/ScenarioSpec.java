@@ -64,6 +64,14 @@ public record ScenarioSpec(
         if (dependsOn.contains(id)) {
             throw new PlanException("scenario " + id + " depends on itself");
         }
+        if (phase == Phase.RESIDENT_RENDER && stopCondition.kind() == StopCondition.Kind.CHUNKS) {
+            // Resident render's barrier waits for the world to be fully loaded before the capture
+            // opens, so no chunk ever arrives during it. Left unchecked this burns a launch and
+            // the whole timeout before failing -- verified the hard way at 60s a repetition.
+            throw new PlanException(
+                    "scenario " + id + " measures the resident render path, where the world is"
+                            + " already loaded, so a chunk target can never be reached");
+        }
         if (phase == Phase.SPAWN_GENERATION && !dependsOn.isEmpty()) {
             // Spawn generation measures world creation itself, so it cannot begin in a world some
             // earlier scenario already created. The config is asking for two incompatible things.
