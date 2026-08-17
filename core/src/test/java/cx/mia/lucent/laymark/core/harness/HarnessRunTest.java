@@ -130,6 +130,34 @@ class HarnessRunTest {
         assertTrue(only.measured(), "a flagged run is still a measurement, just a qualified one");
     }
 
+    /**
+     * A throttle that engages mid-capture leaves real samples with an artificial ceiling in the
+     * middle of them. The port refuses a window that starts throttled; this is the subtler case,
+     * where only a reader can judge what the distribution is worth.
+     */
+    @Test
+    void flagsAThrottleThatEngagedDuringTheCapture() {
+        port.throttle = Throttle.SHORT_AFK;
+
+        ScenarioResult only = run(scenario("resident", 1)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.COMPLETED_WITH_FLAGS, only.outcome());
+        assertTrue(only.flags().toString().contains("SHORT_AFK"), only.flags().toString());
+        assertTrue(only.measured(), "throttled samples are still samples, just qualified ones");
+    }
+
+    /** Every channel reaches the result, whatever the scenario asked to be scored on. */
+    @Test
+    void recordsEveryChannelNotJustTheScoredOne() {
+        Measurement measurement = run(scenario("resident", 1)).scenarios().get(0).measurement();
+
+        assertFalse(measurement.frames().isEmpty());
+        assertFalse(measurement.gpu().isEmpty(), "gpu timings are recorded, not requested");
+        assertFalse(measurement.serverTicks().isEmpty());
+        assertEquals(new WorkCounters(40, 60, 80), measurement.work());
+        assertTrue(measurement.millisPerChunkReceived() > 0, "the duration-independent quantity");
+    }
+
     @Test
     void aFailedRepetitionIsRecordedRatherThanAbandoningTheRun() {
         port.failOnCall = "awaitReady";

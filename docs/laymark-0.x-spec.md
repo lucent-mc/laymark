@@ -279,31 +279,69 @@ required, not optional.
 channel is the **scored** metric; everything else is recorded and reported as diagnostic. A
 three-day run must never end with the realisation that the interesting channel was not captured.
 
-| Channel | Source |
-| --- | --- |
-| Frame time (headline CPU) | vanilla `Minecraft.getFrameTimeNs()`, sampled at `FlipFrameEvent` |
-| Submit-phase decomposition | `RenderFrameEvent.Pre`/`.Post` bracket |
-| GPU execution time | vanilla `CommandEncoder` timer queries; raw `GL_TIMESTAMP` fallback |
-| Integrated-server MSPT and TPS | Spark statistics |
-| Heap and GC | Spark statistics |
-| Work performed | chunks generated, chunks received, render sections built |
-| Time per chunk | derived |
-| Throttle reason, per frame | `FramerateLimitTracker` |
-| Completion time | — |
+| Channel | Source | Scored |
+| --- | --- | --- |
+| **Frame interval** | flip to flip, timestamped at `FlipFrameEvent` | **yes** |
+| Render call | vanilla `Minecraft.getFrameTimeNs()` | no |
+| Submit phase | `RenderFrameEvent.Pre`/`.Post` bracket | no |
+| GPU execution time | vanilla `TimerQuery`, harvested asynchronously | no |
+| Integrated-server tick time | `ServerTickEvent.Pre`/`.Post` bracket | no |
+| Heap and GC | `Runtime` and `GarbageCollectorMXBean`, read at each end | no |
+| Work performed | rendered sections, client chunks, server chunks, at each end | no |
+| Time per chunk | derived | for completion targets |
+| Throttle reason, per frame | `FramerateLimitTracker` | no |
+| Completion time | — | for completion targets |
 
-**No Mixin is needed on NeoForge.** `getFrameTimeNs()` covers update + extract + gpuAsync + render +
-present and excludes buffer swap and the limiter wait, and sampling it at `FlipFrameEvent` puts
-Laymark's own sampling code *outside* every interval it reports. `GameRenderer.render` is **not** a
-whole frame on 26.1 — `extract` precedes it, where NeoForge patches its GUI hooks — so both a Mixin
-and `RenderFrameEvent` bracket the wrong interval, identically. `FlipFrameEvent` implies a NeoForge
-floor of build 26.1.2.73, comfortably below the pinned 26.1.2.95.
+**The three CPU timings nest, and the gaps between them are the point.** A mod that grows the
+interval without touching the render call has moved its cost into the client tick or the swap,
+which points somewhere entirely different than one that grows both.
 
-Never block on the current frame's GPU query and never call `glFinish`; read from a ring several
-frames later. The throttle reason is **recorded** per frame and analysed after the capture, so the
-hot path performs only a field read.
+**The headline is the interval between flips, not `getFrameTimeNs()`.** This corrects the original
+decision on issue #5. That field is assigned from a timer started at `Minecraft#runTick` line 1365
+— *after* the frame's client ticks have already run at line 1308, along with sound, toasts and
+input — and is read before `flipFrame`, so it also excludes the buffer swap and the limiter wait.
+It is therefore blind to client-tick cost entirely, which is precisely where a large class of mods
+spends its time. Measured on a real run it read 53% of the true interval: low by enough to look
+like a fast machine rather than a broken measurement. It is retained as its own channel, where
+that narrowness is the useful property.
 
-**Laymark is designed around Spark and reimplements none of it.** Spark **statistics** are always
-on. The Spark **profiler** is an opt-in diagnostic pass whose metrics can never reach a score:
+**No Mixin is needed on NeoForge.** `GameRenderer.render` is **not** a whole frame on 26.1 —
+`extract` precedes it, where NeoForge patches its GUI hooks — so both a Mixin and a
+`RenderFrameEvent` bracket the wrong interval, identically. Timestamping at `FlipFrameEvent` also
+puts Laymark's own sampling code *outside* every interval it reports. `FlipFrameEvent` implies a
+NeoForge floor of build 26.1.2.73, comfortably below the pinned 26.1.2.95.
+
+**Work counters travel with every timing.** A mod that draws fewer sections posts better frame
+times honestly, and whether that is an optimisation or a downgrade is a judgement only a reader
+with the work counts can make. This is also what makes a mod that deliberately changes the
+workload — culling, most obviously — a valid comparison rather than a cheat: the change is visible
+instead of being inferred from a suspiciously good number.
+
+**Never block on a GPU query and never call `glFinish`.** A timer query resolves several frames
+after the work it timed; reading it eagerly means waiting for the GPU, which changes the thing
+being measured. Outstanding queries sit in a bounded queue and are harvested once `isDone()` is
+already true, and the last few frames' queries are cancelled at the end of a window rather than
+waited for. Timer queries are a driver capability: if anything about them fails, the channel
+switches itself off for the run and records why, rather than failing a run over a diagnostic.
+
+**Integrated-server tick time is bracketed, not sampled.** `MinecraftServer#getTickTimesNanos()`
+holds only the last hundred ticks — five seconds at full rate — so reading it at the end of a
+thirty-second capture would describe its final sixth and present the answer as the whole.
+
+**The throttle reason is recorded per frame** and analysed after the capture, so the hot path
+performs only a field read. A window that begins throttled is refused outright, since there is no
+measurement to qualify; a throttle that engages partway through leaves real samples with an
+artificial ceiling in the middle of them, and is flagged for the reader to weigh.
+
+**The statistics channels do not require Spark.** Server tick time comes from vanilla's own tick
+boundaries and heap/GC from the JVM's management beans — both are properties of the process rather
+than of Minecraft, so nothing has to be installed to read them and nothing extra runs inside the
+process being measured. This narrows Spark's role from the original decision on issue #6 without
+contradicting its reasoning: Laymark still reimplements none of Spark, it simply turns out not to
+need it for these two.
+
+**Spark's remaining role is the profiler**, an opt-in diagnostic pass whose metrics can never
+reach a score:
 Spark ships no async-profiler binary for Windows and falls back to a sampler whose overhead scales
 with thread count — that is, with the thing being compared. `samplerEngine` is recorded in every
 result and results are never compared across engines.

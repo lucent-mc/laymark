@@ -1,7 +1,6 @@
 package cx.mia.lucent.laymark.core.harness;
 
 import java.time.Duration;
-import java.util.List;
 
 /**
  * Everything the run sequence needs the game to do, expressed as semantic operations.
@@ -57,8 +56,14 @@ public interface HarnessPort {
     /** Places the player and suppresses input. */
     void position(Pose pose);
 
-    /** Records frame timings for the given duration and returns the raw samples. */
-    List<FrameSample> capture(Duration duration);
+    /**
+     * Records every channel for the given duration and returns the raw series.
+     *
+     * <p>All channels, always. Deciding per scenario which ones to open would save nothing worth
+     * having — they are field reads on hot paths that already exist — and would guarantee that the
+     * one run nobody thought to instrument is the one that turns out to matter.
+     */
+    Measurement capture(Duration duration);
 
     /**
      * Saves and leaves the world, releasing its lock.

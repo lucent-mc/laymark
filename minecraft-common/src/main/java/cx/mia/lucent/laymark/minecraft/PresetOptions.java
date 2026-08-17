@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.FramerateLimitTracker;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
+import cx.mia.lucent.laymark.core.harness.Throttle;
 import net.minecraft.client.CloudStatus;
 import net.minecraft.client.InactivityFpsLimit;
 import net.minecraft.client.Minecraft;
@@ -109,6 +110,24 @@ public final class PresetOptions {
         return reason == FramerateLimitTracker.FramerateThrottleReason.NONE
                 ? null
                 : reason + " (capped at " + tracker.getFramerateLimit() + " fps)";
+    }
+
+    /**
+     * Translates vanilla's throttle reason into the loader-free enum results are written in.
+     *
+     * <p>An explicit switch rather than a name lookup, so a renamed or added constant is a compile
+     * error here instead of an unrecognised value in a result file a year from now.
+     */
+    public static Throttle throttleOf(FramerateLimitTracker.FramerateThrottleReason reason) {
+        return reason == null
+                ? Throttle.NONE
+                : switch (reason) {
+                    case NONE -> Throttle.NONE;
+                    case WINDOW_ICONIFIED -> Throttle.WINDOW_ICONIFIED;
+                    case LONG_AFK -> Throttle.LONG_AFK;
+                    case SHORT_AFK -> Throttle.SHORT_AFK;
+                    case OUT_OF_LEVEL_MENU -> Throttle.OUT_OF_LEVEL_MENU;
+                };
     }
 
     /**

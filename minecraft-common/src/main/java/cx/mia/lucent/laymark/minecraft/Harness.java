@@ -14,6 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 
@@ -41,8 +43,8 @@ public final class Harness {
      *
      * @param events where to report progress; the runner is on the other end
      */
-    public static Thread start(FrameRecorder recorder, Consumer<Frame> events) {
-        Thread thread = new Thread(() -> execute(recorder, events), "laymark-harness");
+    public static Thread start(ClientChannels channels, Consumer<Frame> events) {
+        Thread thread = new Thread(() -> execute(channels, events), "laymark-harness");
         // Daemon: if the run dies in a way that leaves this thread parked, the game must still be
         // able to exit. A benchmark that will not quit is worse than one that failed.
         thread.setDaemon(true);
@@ -50,7 +52,7 @@ public final class Harness {
         return thread;
     }
 
-    private static void execute(FrameRecorder recorder, Consumer<Frame> events) {
+    private static void execute(ClientChannels channels, Consumer<Frame> events) {
         try {
             if (!ClientThread.await("waiting for the client to boot", BOOT_TIMEOUT, BOOT_POLL, 3,
                     Readiness::idleAtMenu)) {
@@ -58,8 +60,9 @@ public final class Harness {
             }
 
             RunPlan plan = readPlan();
-            RunResult result = new HarnessRun(plan, new MinecraftHarnessPort(recorder), events).execute();
-            Path written = writeResult(plan, result);
+            MinecraftHarnessPort port = new MinecraftHarnessPort(channels);
+            RunResult result = new HarnessRun(plan, port, events).execute();
+            Path written = writeResult(plan, withChannelFlags(result, port));
 
             events.accept(new Frame.RunFinished(written.toString()));
         } catch (RuntimeException e) {
@@ -73,6 +76,24 @@ public final class Harness {
             // machine hostage for the rest of an unattended schedule.
             ClientThread.run("stopping the game", () -> Minecraft.getInstance().stop());
         }
+    }
+
+    /**
+     * Records any channel that could not be measured on this machine.
+     *
+     * <p>Run level rather than per scenario, because a capability like GPU timer queries is a
+     * property of the driver and does not come and go between scenarios. Said explicitly because
+     * an empty GPU series and a GPU series of zeros look the same to a reader who was not told
+     * which one this is.
+     */
+    private static RunResult withChannelFlags(RunResult result, MinecraftHarnessPort port) {
+        String gpuUnavailable = port.gpuUnavailableReason();
+        if (gpuUnavailable == null) {
+            return result;
+        }
+        List<String> flags = new ArrayList<>(result.flags());
+        flags.add("gpu timing unavailable on this machine: " + gpuUnavailable);
+        return new RunResult(result.runId(), result.protocolVersion(), result.scenarios(), flags);
     }
 
     private static RunPlan readPlan() {

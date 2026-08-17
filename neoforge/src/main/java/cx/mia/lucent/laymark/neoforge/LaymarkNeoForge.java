@@ -4,7 +4,7 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.protocol.HarnessClient;
 import cx.mia.lucent.laymark.core.protocol.ProtocolException;
-import cx.mia.lucent.laymark.minecraft.FrameRecorder;
+import cx.mia.lucent.laymark.minecraft.ClientChannels;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.fml.ModContainer;
@@ -29,12 +29,12 @@ public final class LaymarkNeoForge {
     private static volatile HarnessClient client;
 
     /**
-     * Shared with the frame trigger and the run sequence.
+     * Shared by every trigger and the run sequence.
      *
      * <p>Held here rather than created per run because the trigger is registered once for the
-     * life of the process, and a recorder swapped underneath it would drop the frames in flight.
+     * life of the process, and channels swapped underneath them would drop the samples in flight.
      */
-    private static final FrameRecorder RECORDER = new FrameRecorder();
+    private static final ClientChannels CHANNELS = new ClientChannels();
 
     public LaymarkNeoForge(IEventBus modBus, ModContainer container) {
         String version = container.getModInfo().getVersion().toString();
@@ -59,7 +59,7 @@ public final class LaymarkNeoForge {
         LOG.info("Laymark {} connected to its runner (protocol v{})", version, Laymark.PROTOCOL_VERSION);
 
         // The game bus, not the mod bus: frame and resource events are dispatched there.
-        NeoForge.EVENT_BUS.register(new ClientHooks(RECORDER));
+        NeoForge.EVENT_BUS.register(new ClientHooks(CHANNELS));
 
         // Closing the socket is how the runner learns the game is gone, so make sure it happens
         // even on a path that skips an orderly shutdown.

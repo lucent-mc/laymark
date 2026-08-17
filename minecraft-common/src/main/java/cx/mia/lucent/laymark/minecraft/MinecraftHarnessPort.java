@@ -3,6 +3,11 @@ package cx.mia.lucent.laymark.minecraft;
 import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.HarnessPort;
+import cx.mia.lucent.laymark.core.harness.Measurement;
+import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
+import cx.mia.lucent.laymark.core.harness.GpuSample;
+import cx.mia.lucent.laymark.core.harness.TickSample;
+import cx.mia.lucent.laymark.core.harness.WorkCounters;
 import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
@@ -50,9 +55,13 @@ public final class MinecraftHarnessPort implements HarnessPort {
     private static final Duration SETTLE_AFTER_MOVE = Duration.ofSeconds(3);
 
     private final FrameRecorder recorder;
+    private final TickRecorder ticks;
+    private final GpuTimer gpuTimer;
 
-    public MinecraftHarnessPort(FrameRecorder recorder) {
-        this.recorder = recorder;
+    public MinecraftHarnessPort(ClientChannels channels) {
+        this.recorder = channels.frames();
+        this.ticks = channels.ticks();
+        this.gpuTimer = channels.gpu();
     }
 
     @Override
@@ -148,23 +157,45 @@ public final class MinecraftHarnessPort implements HarnessPort {
     }
 
     @Override
-    public List<FrameSample> capture(Duration duration) {
-        String throttleBefore = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
-        if (throttleBefore != null) {
-            throw new HarnessException("framerate was already throttled: " + throttleBefore);
+    public Measurement capture(Duration duration) {
+        String throttled = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
+        if (throttled != null) {
+            // Refused up front rather than flagged. A window that starts throttled is capped for
+            // all of it, so there is no measurement to qualify -- unlike a throttle that engages
+            // partway through, which the per-frame channel records and the sequence flags.
+            throw new HarnessException(
+                    "framerate was already throttled before the capture began: " + throttled);
         }
 
-        ClientThread.run("starting the capture", recorder::start);
+        WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
+        MemorySnapshot memoryBefore = Counters.memory();
+
+        ClientThread.run(
+                "starting the capture",
+                () -> {
+                    gpuTimer.start();
+                    recorder.start();
+                    // Same clock origin for both series, so a server tick and the frame it delayed
+                    // line up on one timeline rather than two that merely started at similar times.
+                    ticks.start(recorder.startedAtNanos());
+                });
+
         ClientThread.sleep(duration);
-        List<FrameSample> samples = ClientThread.call("ending the capture", recorder::stop);
 
-        // Checked after, not only before. Vanilla's inactivity throttle engages partway through a
-        // long window, so a clean reading at the start says nothing about the samples that follow.
-        String throttleAfter = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
-        if (throttleAfter != null) {
-            throw new HarnessException("framerate was throttled during the capture: " + throttleAfter);
-        }
-        return samples;
+        List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
+        List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
+        List<TickSample> serverTicks = ticks.stop();
+
+        WorkCounters workAfter = ClientThread.call("reading work counters", Counters::work);
+        MemorySnapshot memoryAfter = Counters.memory();
+
+        return new Measurement(
+                frames, gpu, serverTicks, workBefore, workAfter, memoryBefore, memoryAfter);
+    }
+
+    /** Why the GPU channel is empty, or null when it worked. Reported as a run-level flag. */
+    public String gpuUnavailableReason() {
+        return ClientThread.call("checking gpu channel", gpuTimer::unavailableReason);
     }
 
     @Override
