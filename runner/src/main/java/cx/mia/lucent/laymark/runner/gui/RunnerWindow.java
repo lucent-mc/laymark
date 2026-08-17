@@ -500,12 +500,18 @@ public final class RunnerWindow implements ExperimentListener {
 
     @Override
     public void roundCompleted(
-            int roundNumber, String baseline, List<Comparison> comparisons, String promoted) {
+            int roundNumber,
+            String baseline,
+            List<Comparison> comparisons,
+            List<CandidateScore> scores,
+            String promoted) {
         SwingUtilities.invokeLater(
                 () -> {
-                    finishColumn(comparisons, promoted);
+                    finishColumn(comparisons, scores, promoted);
+                    // The next round's column opens from its scheduleBuilt; what changes here is
+                    // only what that column will call its baseline.
                     if (promoted != null) {
-                        startColumn(baseline + " + " + promoted);
+                        baselineLabel = baseline + " + " + display(promoted);
                     }
                     liveScores.clear();
                     refresh();
@@ -670,34 +676,116 @@ public final class RunnerWindow implements ExperimentListener {
                                                 false)));
     }
 
-    private void finishColumn(List<Comparison> comparisons, String promoted) {
+    /**
+     * Closes the round's column with one card per candidate: the score, the metric deltas, the
+     * vs-original row from round 2 on, and the per-scenario evidence beneath.
+     */
+    private void finishColumn(
+            List<Comparison> comparisons, List<CandidateScore> scores, String promoted) {
         if (liveRows == null) {
             return;
         }
         liveRows.removeAll();
-        int[] rank = {0};
-        comparisons.stream()
-                .sorted((a, b) -> Double.compare(b.improvementPercent(), a.improvementPercent()))
+        scores.stream()
+                .sorted((a, b) -> Double.compare(b.score(), a.score()))
                 .forEach(
-                        comparison ->
+                        score ->
                                 liveRows.add(
-                                        // One row per (candidate, scenario). Without the scenario
-                                        // in the label the same candidate appears "twice" and the
-                                        // reader has no way to know both rows are telling the
-                                        // truth about different work.
-                                        resultRow(
-                                                ++rank[0],
-                                                display(comparison.candidateId())
-                                                        + "  ·  "
-                                                        + comparison.scenarioId(),
-                                                String.format(
-                                                        Locale.ROOT,
-                                                        "%+.1f%%  %s",
-                                                        comparison.improvementPercent(),
-                                                        band(comparison)),
-                                                comparison.candidateId().equals(promoted))));
+                                        candidateCard(
+                                                score,
+                                                comparisons.stream()
+                                                        .filter(
+                                                                c ->
+                                                                        c.candidateId()
+                                                                                .equals(score.id()))
+                                                        .toList(),
+                                                score.id().equals(promoted))));
         liveColumn = null;
         liveRows = null;
+    }
+
+    /** One candidate's round, led by the score because the score is what ranks it. */
+    private JPanel candidateCard(CandidateScore score, List<Comparison> comparisons, boolean winner) {
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(winner ? new Color(0x17321F) : Theme.RAISED);
+        card.setBorder(
+                javax.swing.BorderFactory.createCompoundBorder(
+                        new Theme.RoundedBorder(winner ? Theme.GOOD : Theme.LINE, 8),
+                        javax.swing.BorderFactory.createEmptyBorder(8, 10, 8, 10)));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel headline = new JPanel(new BorderLayout(8, 0));
+        headline.setOpaque(false);
+        JLabel name = new JLabel((winner ? "★ " : "") + display(score.id()));
+        name.setForeground(winner ? Theme.GOOD : Theme.TEXT);
+        name.setFont(name.getFont().deriveFont(winner ? Font.BOLD : Font.PLAIN, 13f));
+        JLabel scoreLabel =
+                Theme.mono(
+                        String.format(Locale.ROOT, "%+.1f", score.score()),
+                        score.score() > 0 ? Theme.GOOD : score.score() < 0 ? Theme.BAD : Theme.MUTED);
+        scoreLabel.setFont(scoreLabel.getFont().deriveFont(Font.BOLD, 13f));
+        headline.add(name, BorderLayout.WEST);
+        headline.add(scoreLabel, BorderLayout.EAST);
+        card.add(headline);
+
+        JPanel metrics = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
+        metrics.setOpaque(false);
+        metrics.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Lower is better for mspt and ms/chunk, higher for fps: green means "moved the way you
+        // want", not "went up".
+        metricLabel(metrics, "mspt", score.msptDelta(), "%+.1f", true);
+        metricLabel(metrics, "fps", score.fpsDelta(), "%+.0f", false);
+        metricLabel(metrics, "ms/chunk", score.msPerChunkDelta(), "%+.2f", true);
+        JLabel verdict = Theme.small(score.verdict());
+        metrics.add(verdict);
+        card.add(metrics);
+
+        if (score.vsOriginalPercent() != null) {
+            JLabel vsOriginal =
+                    Theme.mono(
+                            String.format(
+                                    Locale.ROOT,
+                                    "vs original baseline  %+.1f%%",
+                                    score.vsOriginalPercent()),
+                            score.vsOriginalPercent() > 0 ? Theme.GOOD : Theme.BAD);
+            vsOriginal.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(vsOriginal);
+        }
+
+        for (Comparison comparison : comparisons) {
+            JLabel scenario =
+                    Theme.small(
+                            String.format(
+                                    Locale.ROOT,
+                                    "%s  %+.1f%%  %s",
+                                    comparison.scenarioId(),
+                                    comparison.improvementPercent(),
+                                    band(comparison)));
+            scenario.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(scenario);
+        }
+
+        JPanel spacer = new JPanel(new BorderLayout());
+        spacer.setOpaque(false);
+        spacer.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 6, 0));
+        spacer.add(card, BorderLayout.CENTER);
+        spacer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        spacer.setMaximumSize(new Dimension(Integer.MAX_VALUE, spacer.getPreferredSize().height));
+        return spacer;
+    }
+
+    private void metricLabel(
+            JPanel into, String name, Double value, String format, boolean lowerIsBetter) {
+        if (value == null) {
+            return;
+        }
+        boolean better = lowerIsBetter ? value < 0 : value > 0;
+        JLabel label =
+                Theme.mono(
+                        name + " " + String.format(Locale.ROOT, format, value),
+                        value == 0 ? Theme.MUTED : better ? Theme.GOOD : Theme.BAD);
+        into.add(label);
     }
 
     private static String band(Comparison comparison) {

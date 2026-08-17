@@ -77,6 +77,16 @@ public final class Laymark {
 
     public static final int WINDOW_HEIGHT = 900;
 
+    /**
+     * The mod ids of the instrumentation, which is never up for assignment.
+     *
+     * <p>Laymark produces the measurements and Spark and Chunky are what it measures through, so
+     * all three load in every arm: as a candidate one reports nothing, and withheld one stops the
+     * run from starting.
+     */
+    public static final java.util.Set<String> INSTRUMENTATION_MOD_IDS =
+            java.util.Set.of("laymark", "spark", "chunky");
+
     /** The run id the harness resolves the config under, passed on the launch command line. */
     public static final String PROPERTY_RUN_ID = "laymark.run";
 

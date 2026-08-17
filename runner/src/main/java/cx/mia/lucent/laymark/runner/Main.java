@@ -83,6 +83,11 @@ public final class Main {
             // closes the report someone opened the window to read.
             boolean windowed = options.containsKey("gui");
 
+            if (options.containsKey("candidates")) {
+                selection(instance, options, control, listener);
+                return;
+            }
+
             if (options.containsKey("selftest")) {
                 selfTest(
                         instance,
@@ -154,7 +159,7 @@ public final class Main {
         System.setErr(window.tee(System.err));
     }
 
-    /** One planned experiment: the chosen candidates, in the order the schedule asks for. */
+    /** One planned experiment: the selection driver over the chosen candidates. */
     private static void execute(
             cx.mia.lucent.laymark.runner.gui.PlanningView.Choice choice,
             RunControl control,
@@ -170,49 +175,13 @@ public final class Main {
                             .toAbsolutePath();
             RunPlan plan = plan(choice.instance(), runId, outputDirectory);
 
-            // The roster says it outright: baseline mods load in every arm, candidates load only in
-            // their own, and anything installed but named neither is withheld for the whole run.
-            var floor = choice.baseline();
-
-            var baseline =
-                    new cx.mia.lucent.laymark.core.experiment.Arm(
-                            "baseline",
-                            cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE,
-                            floor);
-            var acclimation =
-                    new cx.mia.lucent.laymark.core.experiment.Arm(
-                            "acclimation",
-                            cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
-                            floor);
-            // An arm enables the whole bundle: the candidate and the dependencies it carries. The
-            // bundle moves as one, because a candidate without a dependency it needs is not a
-            // smaller arm, it is an arm that does not start.
-            List<cx.mia.lucent.laymark.core.experiment.Arm> candidates =
-                    choice.candidates().entrySet().stream()
-                            .map(
-                                    entry -> {
-                                        var enabled = new java.util.TreeSet<>(floor);
-                                        enabled.addAll(entry.getValue());
-                                        return new cx.mia.lucent.laymark.core.experiment.Arm(
-                                                entry.getKey(),
-                                                cx.mia.lucent.laymark.core.experiment.Arm.Kind
-                                                        .CANDIDATE,
-                                                enabled);
-                                    })
-                            .toList();
-
-            var arms = choice.schedule().expand(candidates, baseline, acclimation, false);
-            System.out.printf(
-                    "schedule %s over %d candidate(s): %d arms%n",
-                    choice.schedule().template(), candidates.size(), arms.size());
-
-            ExperimentRun.execute(
+            SelectionRun.execute(
                     choice.instance(),
                     plan,
-                    arms,
-                    // Baseline mods are participants too. Passing only the candidates would make
-                    // every arm enable mods it does not own, which materialisation rejects.
-                    choice.participants(),
+                    choice.baseline(),
+                    List.copyOf(choice.candidates()),
+                    choice.requires(),
+                    choice.schedule(),
                     outputDirectory,
                     sceneRoot(choice.instance()),
                     // From the plan, not a constant. A fixed ceiling shorter than the captures it
@@ -229,6 +198,122 @@ public final class Main {
             e.printStackTrace(System.out);
             listener.finished(null);
         }
+    }
+
+    /**
+     * A selection from the command line: the planner's choices, as flags.
+     *
+     * <p>Everything the window offers has a flag equivalent and both reach the same driver, so a
+     * run planned in the window is the run these flags describe. Candidates name installed jars,
+     * with or without {@code .jar}; the baseline mode mirrors the planner's presets.
+     */
+    private static void selection(
+            ModrinthInstance instance,
+            Map<String, String> options,
+            RunControl control,
+            ExperimentListener listener)
+            throws IOException {
+
+        Path modsDir = instance.gameDirectory().resolve("mods");
+        List<Path> jars;
+        try (var entries = Files.list(modsDir)) {
+            jars =
+                    entries.filter(Files::isRegularFile)
+                            .filter(path -> path.getFileName().toString().endsWith(".jar"))
+                            .toList();
+        }
+        var probed = cx.mia.lucent.laymark.runner.select.JarProbe.inspect(jars);
+
+        Map<String, String> fileByModId = new java.util.LinkedHashMap<>();
+        probed.modIdByFile().forEach((file, modId) -> fileByModId.putIfAbsent(modId, file));
+        Map<String, java.util.Set<String>> requires = new java.util.LinkedHashMap<>();
+        probed.modIdByFile()
+                .forEach(
+                        (file, modId) -> {
+                            java.util.Set<String> required = new java.util.TreeSet<>();
+                            for (String neededId : probed.graph().directRequirementsOf(modId)) {
+                                String neededFile = fileByModId.get(neededId);
+                                if (neededFile != null) {
+                                    required.add(neededFile);
+                                }
+                            }
+                            if (!required.isEmpty()) {
+                                requires.put(file, required);
+                            }
+                        });
+
+        java.util.Set<String> installed =
+                new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(
+                                instance.gameDirectory())
+                        .read()
+                        .enabledNames();
+        java.util.Set<String> instrumentation = new java.util.TreeSet<>();
+        for (String file : installed) {
+            String modId = probed.modIdByFile().get(file);
+            if (modId != null && Laymark.INSTRUMENTATION_MOD_IDS.contains(modId)) {
+                instrumentation.add(file);
+            }
+        }
+
+        List<String> candidates = new java.util.ArrayList<>();
+        for (String raw : required(options, "candidates").split(",")) {
+            String name = raw.trim();
+            String resolved =
+                    installed.stream()
+                            .filter(f -> f.equals(name) || f.equals(name + ".jar"))
+                            .findFirst()
+                            .orElseGet(
+                                    () ->
+                                            probed.modIdByFile().entrySet().stream()
+                                                    .filter(e -> e.getValue().equals(name))
+                                                    .map(Map.Entry::getKey)
+                                                    .findFirst()
+                                                    .orElse(null));
+            if (resolved == null) {
+                throw new LaunchException(
+                        "no installed mod matches candidate '" + name
+                                + "'; name the jar file or the mod id");
+            }
+            candidates.add(resolved);
+        }
+
+        String mode = options.getOrDefault("baseline", "pack");
+        java.util.Set<String> floor =
+                switch (mode) {
+                    case "pack" -> new java.util.TreeSet<>(installed);
+                    case "blank" -> new java.util.TreeSet<>();
+                    case "parent" -> {
+                        var added =
+                                cx.mia.lucent.laymark.runner.materialize.InlayIndex.addedMods(
+                                        instance.gameDirectory());
+                        var kept = new java.util.TreeSet<>(installed);
+                        // No index means no recorded ancestor: the pack underneath is vanilla.
+                        kept.removeAll(added == null ? installed : added);
+                        yield kept;
+                    }
+                    default ->
+                            throw new LaunchException(
+                                    "--baseline must be pack, blank or parent, got " + mode);
+                };
+        candidates.forEach(floor::remove);
+        floor.addAll(instrumentation);
+
+        var schedule =
+                new cx.mia.lucent.laymark.core.experiment.Schedule(
+                        cx.mia.lucent.laymark.core.experiment.RoundTemplate.parse(
+                                options.getOrDefault("schedule", "A,B,C,B,C")),
+                        Integer.parseInt(options.getOrDefault("baseline-every", "5")));
+
+        execute(
+                new cx.mia.lucent.laymark.runner.gui.PlanningView.Choice(
+                        instance,
+                        floor,
+                        new java.util.TreeSet<>(candidates),
+                        requires,
+                        schedule,
+                        probed.displayNameByFile()),
+                control,
+                listener);
     }
 
     /**
@@ -405,6 +490,12 @@ public final class Main {
                   --out <path>            results root (default: <instance>/.laymark)
                   --timeout <seconds>     how long to wait for the run; by default derived from
                           the scenarios' own stop timeouts plus a launch allowance
+  --candidates <a,b,..>   run a selection over these mods (jar names or mod ids);
+                          rounds promote the single best into the baseline and rerun
+  --baseline <mode>       what candidates are measured against: pack (default),
+                          blank, or parent (the Inlay layer underneath)
+  --schedule <template>   round template (default A,B,C,B,C)
+  --baseline-every <n>    max candidate arms between drift-check baselines (default 5)
   --gui                   open a window with status, schedule, and pause/stop
   --selftest              run N identical baselines and check none beats another
   --arms <n>              how many baselines the self-test uses (default 4)
