@@ -2,8 +2,6 @@ package cx.mia.lucent.laymark.minecraft;
 
 import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
 import cx.mia.lucent.laymark.core.harness.WorkCounters;
-import java.lang.management.GarbageCollectorMXBean;
-import java.lang.management.ManagementFactory;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
 
@@ -41,26 +39,16 @@ final class Counters {
         return new WorkCounters(renderedSections, clientChunks, serverChunks);
     }
 
-    /** Thread-agnostic: these are JVM-wide and safe to read from anywhere. */
+    /**
+     * Heap occupancy. Thread-agnostic: JVM-wide and safe to read from anywhere.
+     *
+     * <p>Heap only. Garbage collection comes from Spark, which reports it better and is already
+     * the source users compare against. This reads {@code Runtime} because {@code spark-api}
+     * exposes no heap figure at all — not because Spark's version was passed over.
+     */
     static MemorySnapshot memory() {
         Runtime runtime = Runtime.getRuntime();
         long committed = runtime.totalMemory();
-        long used = committed - runtime.freeMemory();
-
-        long collections = 0;
-        long pauseMillis = 0;
-        for (GarbageCollectorMXBean collector : ManagementFactory.getGarbageCollectorMXBeans()) {
-            // Both are documented as -1 when the collector does not keep the statistic. Treating
-            // that as zero would understate a delta; skipping keeps the number honest.
-            long count = collector.getCollectionCount();
-            long time = collector.getCollectionTime();
-            if (count > 0) {
-                collections += count;
-            }
-            if (time > 0) {
-                pauseMillis += time;
-            }
-        }
-        return new MemorySnapshot(used, committed, collections, pauseMillis);
+        return new MemorySnapshot(committed - runtime.freeMemory(), committed);
     }
 }

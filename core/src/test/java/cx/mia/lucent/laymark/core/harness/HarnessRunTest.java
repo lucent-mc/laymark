@@ -153,7 +153,7 @@ class HarnessRunTest {
 
         assertFalse(measurement.frames().isEmpty());
         assertFalse(measurement.gpu().isEmpty(), "gpu timings are recorded, not requested");
-        assertFalse(measurement.serverTicks().isEmpty());
+        assertEquals(20.0, measurement.spark().ticksPerSecond());
         assertEquals(new WorkCounters(40, 60, 80), measurement.work());
         assertTrue(measurement.millisPerChunkReceived() > 0, "the duration-independent quantity");
     }

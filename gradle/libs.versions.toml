@@ -10,6 +10,11 @@ neoforge = "26.1.2.95"
 spark = "1.10.173"
 chunky = "1.5.4"
 
+# spark-api carries no release version and has not been republished since 2025-07-03. It is
+# nonetheless the published, supported surface -- everything that drives a capture lives in
+# spark-common, which is shaded into the mod jar and deliberately not imported.
+sparkApi = "0.1-SNAPSHOT"
+
 junit = "5.14.0"
 
 # Exactly the Gson that Minecraft 26.1.2 already ships (confirmed on the captured launch
@@ -20,6 +25,7 @@ gson = "2.13.2"
 
 [libraries]
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+spark-api = { module = "me.lucko:spark-api", version.ref = "sparkApi" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

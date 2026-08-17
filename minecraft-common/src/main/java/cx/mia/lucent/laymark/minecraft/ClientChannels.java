@@ -17,8 +17,8 @@ import net.minecraft.client.Minecraft;
 public final class ClientChannels {
 
     private final FrameRecorder frames = new FrameRecorder();
-    private final TickRecorder ticks = new TickRecorder();
     private final GpuTimer gpu = new GpuTimer();
+    private final SparkChannel spark = new SparkChannel();
 
     /** Buffer flip: the frame just presented is complete and its GPU query can be closed. */
     public void onFramePresented() {
@@ -38,13 +38,7 @@ public final class ClientChannels {
         frames.onRenderFrameEnd();
     }
 
-    public void onServerTickStart() {
-        ticks.onTickStart();
-    }
 
-    public void onServerTickEnd() {
-        ticks.onTickEnd();
-    }
 
     /**
      * Vanilla's throttle reason, translated.
@@ -61,8 +55,8 @@ public final class ClientChannels {
         return frames;
     }
 
-    TickRecorder ticks() {
-        return ticks;
+    SparkChannel spark() {
+        return spark;
     }
 
     GpuTimer gpu() {

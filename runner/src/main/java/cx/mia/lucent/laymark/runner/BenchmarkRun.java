@@ -4,7 +4,7 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.harness.FrameStatistics;
 import cx.mia.lucent.laymark.core.harness.Measurement;
 import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
-import cx.mia.lucent.laymark.core.harness.TickSample;
+import cx.mia.lucent.laymark.core.harness.SparkStatistics;
 import cx.mia.lucent.laymark.core.harness.TimingChannel;
 import cx.mia.lucent.laymark.core.harness.WorkCounters;
 import cx.mia.lucent.laymark.core.plan.PlanCodec;
@@ -228,14 +228,16 @@ public final class BenchmarkRun {
         if (!measurement.gpu().isEmpty()) {
             printChannel("gpu", measurement.gpuStatistics());
         }
-        if (!measurement.serverTicks().isEmpty()) {
-            FrameStatistics ticks = measurement.serverTickStatistics();
-            long overBudget =
-                    measurement.serverTicks().stream().filter(TickSample::overBudget).count();
+        SparkStatistics spark = measurement.spark();
+        if (spark != null) {
             System.out.printf(
-                    "      %-12s %5d ticks   mean %6.2fms  p95 %6.2fms  max %6.2fms  %d over budget%n",
-                    "server tick", ticks.count(), ticks.meanMillis(), ticks.p95Millis(),
-                    ticks.maxMillis(), overBudget);
+                    "      %-12s %5.1f tps    mean %6.2fms  p95 %6.2fms  max %6.2fms  (%ds window)%n",
+                    "server",
+                    spark.ticksPerSecond(),
+                    spark.millisPerTickMean(),
+                    spark.millisPerTickPercentile95(),
+                    spark.millisPerTickMax(),
+                    spark.windowMillis() / 1000);
         }
 
         WorkCounters work = measurement.work();
@@ -244,14 +246,15 @@ public final class BenchmarkRun {
                     "      %-12s sections %+d  client chunks %+d  server chunks %+d%n",
                     "work", work.renderedSections(), work.clientChunks(), work.serverChunks());
         }
-        if (measurement.memoryBefore() != null && measurement.memoryAfter() != null) {
-            MemorySnapshot delta = measurement.memoryAfter().minus(measurement.memoryBefore());
+        if (measurement.memoryAfter() != null) {
             System.out.printf(
-                    "      %-12s heap %6.1fMB  %+d collections, %+dms paused%n",
+                    "      %-12s heap %6.1fMB%s%n",
                     "memory",
                     measurement.memoryAfter().heapUsedMegabytes(),
-                    delta.gcCount(),
-                    delta.gcTimeMillis());
+                    spark == null
+                            ? ""
+                            : "  %d collections, %dms paused"
+                                    .formatted(spark.totalCollections(), spark.totalGcMillis()));
         }
 
         for (String flag : scenario.flags()) {

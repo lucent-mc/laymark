@@ -11,8 +11,23 @@ neoForge {
     version = libs.versions.neoforge.get()
 }
 
+/**
+ * Declared here rather than in settings, and that is not a stylistic choice: Gradle's default
+ * `PREFER_PROJECT` mode ignores the settings-level repositories entirely for any project that
+ * declares its own, and ModDevGradle declares several. A settings entry would resolve nowhere and
+ * look like it should.
+ */
+repositories {
+    maven("https://repo.lucko.me/") { name = "Lucko" }
+}
+
 dependencies {
     implementation(project(":core"))
+
+    // compileOnly, and it must stay that way. The installed Spark mod provides the implementation
+    // at runtime; bundling a copy would put a second one inside the process being measured, which
+    // is the one place Laymark cannot afford to add classes.
+    compileOnly(libs.spark.api)
 }
 
 /**

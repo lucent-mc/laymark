@@ -9,8 +9,9 @@ import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.GpuSample;
 import cx.mia.lucent.laymark.core.harness.Measurement;
 import cx.mia.lucent.laymark.core.harness.MemorySnapshot;
+import cx.mia.lucent.laymark.core.harness.SparkStatistics;
 import cx.mia.lucent.laymark.core.harness.Throttle;
-import cx.mia.lucent.laymark.core.harness.TickSample;
+
 import cx.mia.lucent.laymark.core.harness.TimingChannel;
 import cx.mia.lucent.laymark.core.harness.WorkCounters;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
@@ -46,11 +47,13 @@ class ResultCodecTest {
                                                         2_100_000,
                                                         Throttle.SHORT_AFK)),
                                         List.of(new GpuSample(0, 3_300_000)),
-                                        List.of(new TickSample(0, 11_000_000)),
+                                        new SparkStatistics(
+                                                20.0, 2.4, 0.9, 8.1, 2.2, 5.6, 10_000,
+                                                List.of(new SparkStatistics.GcActivity("G1 Young", 4, 21))),
                                         new WorkCounters(10, 20, 30),
                                         new WorkCounters(18, 41, 55),
-                                        new MemorySnapshot(1_024, 4_096, 3, 21),
-                                        new MemorySnapshot(2_048, 4_096, 7, 64)),
+                                        new MemorySnapshot(1_024, 4_096),
+                                        new MemorySnapshot(2_048, 4_096)),
                                 5_000),
                         ScenarioResult.failed("traversal", 1, "world never became ready")),
                 List.of("machine was not quiet"));
@@ -78,9 +81,47 @@ class ResultCodecTest {
         assertEquals(2_000_000, read.frames().get(0).submitNanos());
         assertEquals(Throttle.SHORT_AFK, read.frames().get(1).throttle());
         assertEquals(1, read.gpu().size());
-        assertEquals(1, read.serverTicks().size());
         assertEquals(new WorkCounters(8, 21, 25), read.work());
-        assertEquals(4, read.memoryAfter().minus(read.memoryBefore()).gcCount());
+        assertEquals(1024, read.memoryAfter().minus(read.memoryBefore()).heapUsedBytes());
+
+        // Spark's figures describe a rolling window, so the window length has to survive with
+        // them or a reader cannot tell what period the numbers cover.
+        assertEquals(20.0, read.spark().ticksPerSecond());
+        assertEquals(2.4, read.spark().millisPerTickMean());
+        assertEquals(10_000, read.spark().windowMillis());
+        assertEquals(4, read.spark().totalCollections());
+        assertEquals("G1 Young", read.spark().gc().get(0).collector());
+    }
+
+    /** A machine without Spark installed produces a result, not a failure. */
+    @Test
+    void survivesAnAbsentSparkChannel() {
+        Measurement withoutSpark =
+                new Measurement(
+                        List.of(FrameSample.interval(0, 8_000_000)),
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null);
+        RunResult result =
+                new RunResult(
+                        "r",
+                        1,
+                        List.of(
+                                ScenarioResult.completed(
+                                        "s",
+                                        1,
+                                        new PresetReadback(Preset.defaults(), 800, 600, false),
+                                        List.of(),
+                                        withoutSpark,
+                                        1)),
+                        List.of("server statistics unavailable: spark is not installed"));
+
+        RunResult read = ResultCodec.read(ResultCodec.write(result));
+        assertEquals(result, read);
+        assertTrue(read.complete(), "a missing diagnostic channel does not invalidate a run");
     }
 
     /** Channels nest, so a report can only be read if the reader knows which is which. */
@@ -139,7 +180,7 @@ class ResultCodecTest {
                                                 new Measurement(
                                                         List.of(FrameSample.interval(0, 1)),
                                                         List.of(),
-                                                        List.of(),
+                                                        null,
                                                         null,
                                                         null,
                                                         null,
