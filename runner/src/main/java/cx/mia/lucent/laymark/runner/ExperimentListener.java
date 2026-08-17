@@ -48,13 +48,59 @@ public interface ExperimentListener {
     default void runFinished(int sequence, Arm arm, double scoredMillis, boolean failed) {}
 
     /**
+     * One candidate's round in summary: the score a card leads with, the metric deltas beneath it,
+     * and the verdict that decided its fate.
+     *
+     * <p>Deltas are candidate-mean minus baseline-mean for this round, null where a channel could
+     * not be measured. {@code vsOriginalPercent} is null in round 1, where the current baseline
+     * <em>is</em> the original.
+     */
+    record CandidateScore(
+            String id,
+            double score,
+            Double msptDelta,
+            Double fpsDelta,
+            Double msPerChunkDelta,
+            Double vsOriginalPercent,
+            String verdict,
+            String detail) {
+
+        public String describe() {
+            StringBuilder text = new StringBuilder(id);
+            text.append(String.format(java.util.Locale.ROOT, "  score %+.1f", score));
+            if (msptDelta != null) {
+                text.append(String.format(java.util.Locale.ROOT, "  mspt %+.1f", msptDelta));
+            }
+            if (fpsDelta != null) {
+                text.append(String.format(java.util.Locale.ROOT, "  fps %+.0f", fpsDelta));
+            }
+            if (msPerChunkDelta != null) {
+                text.append(
+                        String.format(java.util.Locale.ROOT, "  ms/chunk %+.2f", msPerChunkDelta));
+            }
+            if (vsOriginalPercent != null) {
+                text.append(
+                        String.format(
+                                java.util.Locale.ROOT, "  vs original %+.1f%%", vsOriginalPercent));
+            }
+            text.append("  ").append(verdict);
+            return text.toString();
+        }
+    }
+
+    /**
      * One selection round has concluded.
      *
      * @param baselineLabel what this round's candidates were measured against
+     * @param scores one per candidate still in the pool, the card's content
      * @param promoted the winner, joining the baseline for the next round; null when none
      */
     default void roundCompleted(
-            int round, String baselineLabel, List<Comparison> comparisons, String promoted) {}
+            int round,
+            String baselineLabel,
+            List<Comparison> comparisons,
+            List<CandidateScore> scores,
+            String promoted) {}
 
     /** "running", "paused", "stopping" — for a status line, not for logic. */
     default void stateChanged(String state) {}

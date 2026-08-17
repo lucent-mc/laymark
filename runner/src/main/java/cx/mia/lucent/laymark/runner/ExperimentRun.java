@@ -152,7 +152,7 @@ public final class ExperimentRun {
         List<Drift.VoidWindow> voids = Drift.detect(baselineRuns);
         SelectionReport report =
                 report(plan, runs, measured, baselineRuns, voids, startedAt);
-        listener.roundCompleted(1, "baseline", report.comparisons(), null);
+        listener.roundCompleted(1, "baseline", report.comparisons(), java.util.List.of(), null);
         listener.finished(report);
 
         Files.createDirectories(outputDirectory);
@@ -231,7 +231,7 @@ public final class ExperimentRun {
      * comparable. A chunk target does not: the faster stack finishes sooner, so the two arms
      * observe windows of different length and only cost-per-unit-of-work compares.
      */
-    private static double scored(ScenarioResult scenario, RunPlan plan) {
+    static double scored(ScenarioResult scenario, RunPlan plan) {
         var spec =
                 plan.scenarios().stream()
                         .filter(s -> s.id().equals(scenario.scenarioId()))

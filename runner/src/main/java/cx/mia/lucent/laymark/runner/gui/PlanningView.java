@@ -58,31 +58,21 @@ public final class PlanningView extends JPanel {
      * to write. Pose, preset, phases and stop condition all live in that file.
      */
     /**
-     * @param baseline what loads in every arm: the explicit baseline mods, the instrumentation,
-     *     and whatever those require
-     * @param candidates each candidate's <strong>bundle</strong> — the candidate itself plus the
-     *     dependencies it carries that the baseline does not already load. The whole bundle
-     *     enables and disables as one, so the comparison is "with this mod, runnable" against
-     *     "without it"; a candidate stripped of a dependency it needs is not a smaller arm, it is
-     *     an arm that does not start.
+     * @param baseline what loads in every arm before any promotion: the explicit baseline mods,
+     *     the instrumentation, and whatever those require
+     * @param candidates the mods under test, in roster order. Bundling — each candidate plus the
+     *     dependencies it carries — is the selection driver's job, recomputed every round as the
+     *     baseline grows, which is why this carries the raw {@code requires} edges instead of
+     *     bundles computed once.
+     * @param requires direct requirements between installed files, from the jars' own manifests
      */
     public record Choice(
             ModrinthInstance instance,
             Set<String> baseline,
-            Map<String, Set<String>> candidates,
+            Set<String> candidates,
+            Map<String, Set<String>> requires,
             Schedule schedule,
-            Map<String, String> displayNames) {
-
-        /**
-         * Every mod Laymark takes charge of. Anything installed and not named here is withheld for
-         * the whole run rather than merely disabled, so {@code mods/} holds only what took part.
-         */
-        public Set<String> participants() {
-            Set<String> all = new TreeSet<>(baseline);
-            candidates.values().forEach(all::addAll);
-            return all;
-        }
-    }
+            Map<String, String> displayNames) {}
 
     private static final String NO_VERSION = "— pick one —";
     private static final String VERSION_KEY = "version.";
@@ -806,7 +796,7 @@ public final class PlanningView extends JPanel {
      * offers a run that reports nothing, and offering it as "off" offers a run that cannot start,
      * so all three are held in the baseline and kept out of the list.
      */
-    private static final Set<String> INSTRUMENTATION = Set.of("laymark", "spark", "chunky");
+    private static final Set<String> INSTRUMENTATION = Laymark.INSTRUMENTATION_MOD_IDS;
 
     /** The installed mods an operator may assign. */
     private Set<String> installed(Path gameDirectory) {
@@ -894,22 +884,30 @@ public final class PlanningView extends JPanel {
             baseline.addAll(carriedDependencies(name));
         }
 
-        Map<String, Set<String>> bundles = new LinkedHashMap<>();
-        for (String candidate : named(Role.CANDIDATE)) {
-            Set<String> bundle = new TreeSet<>();
-            bundle.add(candidate);
-            for (String dep : carriedDependencies(candidate)) {
-                if (!baseline.contains(dep)) {
-                    bundle.add(dep);
-                }
-            }
-            bundles.put(candidate, bundle);
+        // The dependency edges in file space, so the driver can rebuild bundles every round
+        // against whatever the baseline has grown into.
+        Map<String, Set<String>> requires = new LinkedHashMap<>();
+        if (graph != null) {
+            modIdByFile.forEach(
+                    (file, modId) -> {
+                        Set<String> required = new TreeSet<>();
+                        for (String neededId : graph.directRequirementsOf(modId)) {
+                            String neededFile = fileByModId.get(neededId);
+                            if (neededFile != null) {
+                                required.add(neededFile);
+                            }
+                        }
+                        if (!required.isEmpty()) {
+                            requires.put(file, required);
+                        }
+                    });
         }
 
         return new Choice(
                 new ModrinthInstance(root, profile, version),
                 baseline,
-                bundles,
+                named(Role.CANDIDATE),
+                requires,
                 parsed,
                 Map.copyOf(displayNameByFile));
     }
