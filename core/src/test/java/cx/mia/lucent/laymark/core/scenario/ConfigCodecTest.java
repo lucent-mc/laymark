@@ -30,7 +30,7 @@ class ConfigCodecTest {
 
         assertEquals(1, config.scenarios().size());
         assertEquals("resident", config.scenarios().get(0).id());
-        assertTrue(config.presets().isEmpty());
+        assertTrue(config.settingsPresets().isEmpty());
     }
 
     @Test
@@ -94,10 +94,10 @@ class ConfigCodecTest {
     void rejectsAnOutOfRangePresetValue() {
         String json =
                 """
-                {"version":1,"presets":{"silly":{"renderDistance":900,"simulationDistance":12,
+                {"version":1,"settingsPresets":{"silly":{"renderDistance":900,"simulationDistance":12,
                  "framerateLimit":260,"vsync":false,"particles":"ALL","clouds":"FANCY",
                  "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70}},
-                 "scenarios":[{"id":"s","preset":"silly"}]}
+                 "scenarios":[{"id":"s","settings":"silly"}]}
                 """;
         PlanException e = assertThrows(PlanException.class, () -> ConfigCodec.read(json));
         assertTrue(e.getMessage().contains("renderDistance"), e.getMessage());
@@ -108,28 +108,28 @@ class ConfigCodecTest {
      * tag that exists only for the parser's benefit.
      */
     @Test
-    void readsPresetAsEitherANameOrSettings() {
+    void readsSettingsAsEitherANameOrAnObject() {
         ScenarioConfig named =
                 ConfigCodec.read(
                         """
-                        {"version":1,"presets":{"near":{"renderDistance":8,"simulationDistance":8,
+                        {"version":1,"settingsPresets":{"near":{"renderDistance":8,"simulationDistance":8,
                          "framerateLimit":260,"vsync":false,"particles":"ALL","clouds":"FANCY",
                          "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70}},
-                         "scenarios":[{"id":"s","preset":"near"}]}
+                         "scenarios":[{"id":"s","settings":"near"}]}
                         """);
         assertEquals(
-                PresetRef.named("near"), named.scenarios().get(0).preset());
+                PresetRef.named("near"), named.scenarios().get(0).settings());
         assertEquals(8, named.resolve("r", "/out").scenarios().get(0).preset().renderDistance());
 
         ScenarioConfig inline =
                 ConfigCodec.read(
                         """
-                        {"version":1,"scenarios":[{"id":"s","preset":{"renderDistance":16,
+                        {"version":1,"scenarios":[{"id":"s","settings":{"renderDistance":16,
                          "simulationDistance":12,"framerateLimit":260,"vsync":false,
                          "particles":"ALL","clouds":"FANCY","entityShadows":true,
                          "biomeBlendRadius":2,"fieldOfView":70}}]}
                         """);
-        assertTrue(inline.scenarios().get(0).preset() instanceof PresetRef.Inline);
+        assertTrue(inline.scenarios().get(0).settings() instanceof PresetRef.Inline);
         assertEquals(16, inline.resolve("r", "/out").scenarios().get(0).preset().renderDistance());
     }
 
@@ -138,23 +138,23 @@ class ConfigCodecTest {
     void writesBackTheSpellingItRead() {
         String named = ConfigCodec.write(ConfigCodec.read(
                 """
-                {"version":1,"presets":{"near":{"renderDistance":8,"simulationDistance":8,
+                {"version":1,"settingsPresets":{"near":{"renderDistance":8,"simulationDistance":8,
                  "framerateLimit":260,"vsync":false,"particles":"ALL","clouds":"FANCY",
                  "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70}},
-                 "scenarios":[{"id":"s","preset":"near"}]}
+                 "scenarios":[{"id":"s","settings":"near"}]}
                 """));
-        assertTrue(named.contains("\"preset\": \"near\""), named);
+        assertTrue(named.contains("\"settings\": \"near\""), named);
     }
 
     @Test
-    void rejectsAPresetThatIsNeitherANameNorSettings() {
+    void rejectsSettingsThatAreNeitherANameNorAnObject() {
         PlanException e =
                 assertThrows(
                         PlanException.class,
                         () ->
                                 ConfigCodec.read(
-                                        "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"preset\":42}]}"));
-        assertTrue(e.getMessage().contains("preset"), e.getMessage());
+                                        "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"settings\":42}]}"));
+        assertTrue(e.getMessage().contains("settings"), e.getMessage());
     }
 
     @Test

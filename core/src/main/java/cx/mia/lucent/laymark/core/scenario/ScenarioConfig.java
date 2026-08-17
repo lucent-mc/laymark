@@ -24,11 +24,11 @@ import java.util.Map;
  * this type only says what a scenario is allowed to declare.
  *
  * @param version schema version of this document, checked on read
- * @param presets reusable settings bundles, referenced by name from a scenario
+ * @param settingsPresets reusable settings bundles, referenced by name from a scenario
  * @param scenarios in declaration order
  */
 public record ScenarioConfig(
-        int version, Map<String, Preset> presets, List<ScenarioDefinition> scenarios) {
+        int version, Map<String, Preset> settingsPresets, List<ScenarioDefinition> scenarios) {
 
     /** Bumped only when an existing document would be read wrongly rather than merely partially. */
     public static final int SCHEMA_VERSION = 1;
@@ -39,7 +39,7 @@ public record ScenarioConfig(
                     "config schema version " + version + " is not supported; this build reads "
                             + SCHEMA_VERSION);
         }
-        presets = presets == null ? Map.of() : Map.copyOf(presets);
+        settingsPresets = settingsPresets == null ? Map.of() : Map.copyOf(settingsPresets);
         if (scenarios == null || scenarios.isEmpty()) {
             throw new PlanException("config declares no scenarios");
         }
@@ -78,10 +78,10 @@ public record ScenarioConfig(
      *     guessing at a typo in a file they cannot see the parsed form of
      */
     private Preset preset(String name) {
-        Preset preset = presets.get(name);
+        Preset preset = settingsPresets.get(name);
         if (preset == null) {
             throw new PlanException(
-                    "no preset named '" + name + "'; this config defines " + presets.keySet());
+                    "no preset named '" + name + "'; this config defines " + settingsPresets.keySet());
         }
         return preset;
     }

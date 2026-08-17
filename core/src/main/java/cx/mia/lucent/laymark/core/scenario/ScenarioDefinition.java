@@ -22,7 +22,7 @@ import java.util.function.Function;
  *     that depends on another cannot run standalone.
  * @param phase which of the four measured phases this scenario is; decides which preconditions
  *     apply and, for two of them, which negative precondition can fail the run
- * @param preset either a name from the config's {@code presets} map or the settings written out;
+ * @param settings either a name from the config's {@code presets} map or the values written
  *     one field rather than two, so "named and inline at once" is not expressible
  * @param content scene geometry to place before measuring, in declaration order
  */
@@ -32,7 +32,7 @@ public record ScenarioDefinition(
         Phase phase,
         StopCondition stop,
         Integer repetitions,
-        PresetRef preset,
+        PresetRef settings,
         Pose pose,
         Long seed,
         Boolean generateStructures,
@@ -58,7 +58,7 @@ public record ScenarioDefinition(
      * @param presets resolves a preset name; called only when the scenario named one
      */
     public ScenarioSpec resolve(Function<String, Preset> presets) {
-        Preset effective = preset == null ? Preset.defaults() : preset.resolve(presets);
+        Preset effective = settings == null ? Preset.defaults() : settings.resolve(presets);
 
         return new ScenarioSpec(
                 id,

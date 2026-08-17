@@ -28,7 +28,7 @@ final class PresetRefAdapter implements JsonSerializer<PresetRef>, JsonDeseriali
             return PresetRef.inline(context.deserialize(json, Preset.class));
         }
         throw new PlanException(
-                "'preset' must be either a preset name or a settings object, got " + json);
+                "'settings' must be either a preset name or a settings object, got " + json);
     }
 
     @Override
