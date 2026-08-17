@@ -45,11 +45,10 @@ class ConfigCodecTest {
                                         List.of(),
                                         Phase.UNGENERATED_TRAVERSAL,
                                         new StopCondition.UntilComplete("chunks", 120_000),
-                                        3,
-                                        "low",
+                                         3,
+                                        PresetRef.named("low"),
                                         null,
-                                        null,
-                                        4242L,
+                                         4242L,
                                         true,
                                         List.of(new ScenePlacement("scenes/pen.schem", 0, 64, 0)))));
 
@@ -98,10 +97,64 @@ class ConfigCodecTest {
                 {"version":1,"presets":{"silly":{"renderDistance":900,"simulationDistance":12,
                  "framerateLimit":260,"vsync":false,"particles":"ALL","clouds":"FANCY",
                  "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70}},
-                 "scenarios":[{"id":"s","presetName":"silly"}]}
+                 "scenarios":[{"id":"s","preset":"silly"}]}
                 """;
         PlanException e = assertThrows(PlanException.class, () -> ConfigCodec.read(json));
         assertTrue(e.getMessage().contains("renderDistance"), e.getMessage());
+    }
+
+    /**
+     * One field, two spellings. The JSON type is the discriminator, so an operator never writes a
+     * tag that exists only for the parser's benefit.
+     */
+    @Test
+    void readsPresetAsEitherANameOrSettings() {
+        ScenarioConfig named =
+                ConfigCodec.read(
+                        """
+                        {"version":1,"presets":{"near":{"renderDistance":8,"simulationDistance":8,
+                         "framerateLimit":260,"vsync":false,"particles":"ALL","clouds":"FANCY",
+                         "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70}},
+                         "scenarios":[{"id":"s","preset":"near"}]}
+                        """);
+        assertEquals(
+                PresetRef.named("near"), named.scenarios().get(0).preset());
+        assertEquals(8, named.resolve("r", "/out").scenarios().get(0).preset().renderDistance());
+
+        ScenarioConfig inline =
+                ConfigCodec.read(
+                        """
+                        {"version":1,"scenarios":[{"id":"s","preset":{"renderDistance":16,
+                         "simulationDistance":12,"framerateLimit":260,"vsync":false,
+                         "particles":"ALL","clouds":"FANCY","entityShadows":true,
+                         "biomeBlendRadius":2,"fieldOfView":70}}]}
+                        """);
+        assertTrue(inline.scenarios().get(0).preset() instanceof PresetRef.Inline);
+        assertEquals(16, inline.resolve("r", "/out").scenarios().get(0).preset().renderDistance());
+    }
+
+    /** Each spelling must come back out the way it went in, or a config rewrite would rewrite it. */
+    @Test
+    void writesBackTheSpellingItRead() {
+        String named = ConfigCodec.write(ConfigCodec.read(
+                """
+                {"version":1,"presets":{"near":{"renderDistance":8,"simulationDistance":8,
+                 "framerateLimit":260,"vsync":false,"particles":"ALL","clouds":"FANCY",
+                 "entityShadows":true,"biomeBlendRadius":2,"fieldOfView":70}},
+                 "scenarios":[{"id":"s","preset":"near"}]}
+                """));
+        assertTrue(named.contains("\"preset\": \"near\""), named);
+    }
+
+    @Test
+    void rejectsAPresetThatIsNeitherANameNorSettings() {
+        PlanException e =
+                assertThrows(
+                        PlanException.class,
+                        () ->
+                                ConfigCodec.read(
+                                        "{\"version\":1,\"scenarios\":[{\"id\":\"s\",\"preset\":42}]}"));
+        assertTrue(e.getMessage().contains("preset"), e.getMessage());
     }
 
     @Test

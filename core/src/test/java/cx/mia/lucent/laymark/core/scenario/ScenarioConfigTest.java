@@ -61,7 +61,7 @@ class ScenarioConfigTest {
                         Map.of("low", lowDetail),
                         List.of(
                                 new ScenarioDefinition(
-                                        "s", List.of(), null, null, null, "low", null, null, null,
+                                        "s", List.of(), null, null, null, PresetRef.named("low"), null, null,
                                         null, null)));
 
         ScenarioSpec resolved = resolve(config).scenarios().get(0);
@@ -78,7 +78,7 @@ class ScenarioConfigTest {
                         Map.of("low", Preset.defaults()),
                         List.of(
                                 new ScenarioDefinition(
-                                        "s", List.of(), null, null, null, "lwo", null, null, null,
+                                        "s", List.of(), null, null, null, PresetRef.named("lwo"), null, null,
                                         null, null)));
 
         PlanException e = assertThrows(PlanException.class, () -> resolve(config));
@@ -86,17 +86,22 @@ class ScenarioConfigTest {
         assertTrue(e.getMessage().contains("low"), "the error should name what is available");
     }
 
-    /** Preferring one silently would make the other's presence a lie. */
+    /**
+     * The union makes "named and inline at once" unrepresentable, so there is no rule to test --
+     * only that each spelling still resolves.
+     */
     @Test
-    void refusesAScenarioThatBothNamesAndInlinesAPreset() {
-        PlanException e =
-                assertThrows(
-                        PlanException.class,
-                        () ->
-                                new ScenarioDefinition(
-                                        "s", List.of(), null, null, null, "low", Preset.defaults(),
-                                        null, null, null, null));
-        assertTrue(e.getMessage().contains("pick one"), e.getMessage());
+    void inlineSettingsResolveWithoutAPresetMap() {
+        Preset inline = Preset.defaults();
+        ScenarioSpec resolved =
+                resolve(
+                                ScenarioConfig.of(
+                                        new ScenarioDefinition(
+                                                "s", List.of(), null, null, null,
+                                                PresetRef.inline(inline), null, null, null, null)))
+                        .scenarios()
+                        .get(0);
+        assertEquals(inline, resolved.preset());
     }
 
     @Test
@@ -139,7 +144,7 @@ class ScenarioConfigTest {
                                 "second",
                                 List.of("first"),
                                 Phase.SPAWN_GENERATION,
-                                null, null, null, null, null, null, null, null));
+                                null, null, null, null, null, null, null));
 
         PlanException e = assertThrows(PlanException.class, () -> resolve(config));
         assertTrue(e.getMessage().contains("cannot reuse a world"), e.getMessage());
@@ -153,8 +158,7 @@ class ScenarioConfigTest {
                         List.of(),
                         Phase.UNGENERATED_TRAVERSAL,
                         new StopCondition.UntilComplete("chunks", 120_000),
-                        3,
-                        null,
+                         3,
                         null,
                         Pose.lookingDown(2048.5, 500, 2048.5),
                         4242L,
@@ -186,11 +190,9 @@ class ScenarioConfigTest {
         ScenarioConfig config =
                 ScenarioConfig.of(
                         new ScenarioDefinition(
-                                "a", List.of("b"), null, null, null, null, null, null, null, null,
-                                null),
+                                "a", List.of("b"), null, null, null, null, null, null, null, null),
                         new ScenarioDefinition(
-                                "b", List.of("a"), null, null, null, null, null, null, null, null,
-                                null));
+                                "b", List.of("a"), null, null, null, null, null, null, null, null));
 
         PlanException e = assertThrows(PlanException.class, () -> resolve(config));
         assertTrue(e.getMessage().contains("cycle"), e.getMessage());

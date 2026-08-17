@@ -22,9 +22,8 @@ import java.util.function.Function;
  *     that depends on another cannot run standalone.
  * @param phase which of the four measured phases this scenario is; decides which preconditions
  *     apply and, for two of them, which negative precondition can fail the run
- * @param presetName names an entry in the config's preset map; mutually exclusive with
- *     {@link #preset}
- * @param preset an inline settings bundle; mutually exclusive with {@link #presetName}
+ * @param preset either a name from the config's {@code presets} map or the settings written out;
+ *     one field rather than two, so "named and inline at once" is not expressible
  * @param content scene geometry to place before measuring, in declaration order
  */
 public record ScenarioDefinition(
@@ -33,8 +32,7 @@ public record ScenarioDefinition(
         Phase phase,
         StopCondition stop,
         Integer repetitions,
-        String presetName,
-        Preset preset,
+        PresetRef preset,
         Pose pose,
         Long seed,
         Boolean generateStructures,
@@ -50,12 +48,6 @@ public record ScenarioDefinition(
         if (id == null || id.isBlank()) {
             throw new PlanException("a scenario has no id");
         }
-        if (presetName != null && preset != null) {
-            // Silently preferring one would make the other's presence a lie, and the loser would
-            // be whichever the implementation happened to check second.
-            throw new PlanException(
-                    "scenario " + id + " sets both 'presetName' and an inline 'preset'; pick one");
-        }
         dependsOn = dependsOn == null ? List.of() : List.copyOf(dependsOn);
         content = content == null ? List.of() : List.copyOf(content);
     }
@@ -66,10 +58,7 @@ public record ScenarioDefinition(
      * @param presets resolves a preset name; called only when the scenario named one
      */
     public ScenarioSpec resolve(Function<String, Preset> presets) {
-        Preset effective =
-                preset != null
-                        ? preset
-                        : presetName != null ? presets.apply(presetName) : Preset.defaults();
+        Preset effective = preset == null ? Preset.defaults() : preset.resolve(presets);
 
         return new ScenarioSpec(
                 id,
@@ -104,6 +93,6 @@ public record ScenarioDefinition(
     /** The shortest valid scenario: an id and nothing else. */
     public static ScenarioDefinition of(String id) {
         return new ScenarioDefinition(
-                id, List.of(), null, null, null, null, null, null, null, null, List.of());
+                id, List.of(), null, null, null, null, null, null, null, List.of());
     }
 }
