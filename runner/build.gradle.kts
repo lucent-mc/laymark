@@ -7,6 +7,10 @@ description = "Desktop runner: launch assembly, process ownership, materializati
 
 dependencies {
     implementation(project(":core"))
+    // The only third-party dependency the runner has, and it is a Swing look-and-feel: still no
+    // toolkit, still one jar, still nothing loaded into the measured JVM. Hand-rolling a dark theme
+    // means restyling every scroll bar and check box by hand to arrive somewhere worse.
+    implementation("com.formdev:flatlaf:3.6")
 }
 
 // The runner assembles launch commands for a mod loader, so loader names appear throughout its

@@ -6,6 +6,7 @@ import cx.mia.lucent.laymark.core.stats.Comparison;
 import cx.mia.lucent.laymark.runner.ExperimentListener;
 import cx.mia.lucent.laymark.runner.RunControl;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -23,7 +24,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
@@ -32,67 +32,68 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
 
 /**
- * The runner's window: progress, what is running right now, the schedule, the selection grid, and
- * the log.
+ * The runner's window: plan an experiment, then watch it run.
  *
- * <p>Observes and controls — it never configures. Arguments decide what the run is; this shows what
- * it is doing and lets an operator hold or end it. So there is nothing here that adds, reorders or
- * re-sorts an arm: those come from the command line, and a control that appeared to change them
- * would be lying.
+ * <p>Two views behind one title bar. The planning view is the only part that configures anything,
+ * and it exists so the jar can be opened by double-clicking it; once Start is pressed the window
+ * only observes and controls. Nothing here reorders or re-scores an arm — the schedule is the
+ * experiment's, not the window's.
  *
- * <p>It also shows no summary statistics for the run in flight. No single number says whether a
- * candidate is really an improvement — that is what the paired comparison in the selection grid is
- * for, and a headline mean beside it would be read as the answer.
+ * <p>It shows no summary statistic for the run in flight. No single live number separates a real
+ * improvement from noise; the paired comparison in the run columns is the answer, and a headline
+ * beside it would be read as one.
  *
- * <p>Swing because it ships in the JDK: the runner stays one shaded jar with no toolkit dependency,
- * and the GUI runs in the runner's process, never the game's, so it cannot sit beneath a published
- * number.
+ * <p>Swing, in the runner's process and never the game's, so the GUI cannot end up beneath a
+ * published number.
  *
  * <p>All listener callbacks arrive on the experiment thread and are marshalled to the EDT here; the
  * experiment never waits on this class.
  */
 public final class RunnerWindow implements ExperimentListener {
 
-    private static final Color RUNNING = new Color(0x2F6FDE);
-    private static final Color DONE = new Color(0x2E7D32);
-    private static final Color FAILED = new Color(0xC62828);
-    private static final Color WINNER = new Color(0x1B5E20);
-    private static final Color MUTED = new Color(0x6B6B6B);
+    /** How the window asks for the experiment it just described to be run. */
+    public interface Launcher {
+        void start(PlanningView.Choice choice, RunControl control, ExperimentListener listener);
+    }
 
-    /** Kept bounded: a long run prints more than a text area should hold. */
     private static final int LOG_LINE_LIMIT = 4000;
 
     private final RunControl control;
+    private final Launcher launcher;
+
     private final JFrame frame = new JFrame("Laymark");
-    private final JLabel status = new JLabel("starting");
-    private final JLabel progress = new JLabel("");
-    private final JLabel elapsed = new JLabel("0:00");
-    private final JLabel remaining = new JLabel("");
-    private final JButton pauseButton = new JButton("Pause");
-    private final JButton stopButton = new JButton("Stop");
+    private final CardLayout views = new CardLayout();
+    private final JPanel body = new JPanel(views);
+    private final PlanningView planning = new PlanningView();
 
-    private final JLabel currentArm = new JLabel("—");
-    private final JLabel currentBaseline = new JLabel("—");
-    private final JLabel currentScenario = new JLabel("—");
+    private final JButton startButton = Theme.button("Start", true);
+    private final JButton stopButton = Theme.button("Stop", false);
+    private final Theme.Dot statusDot = new Theme.Dot(Theme.MUTED, true);
+    private final JLabel status = new JLabel("Ready");
+    private final JLabel progress = Theme.muted("");
+    private final JLabel eta = Theme.muted("");
 
-    private final JPanel schedulePanel = new JPanel();
-    private final JPanel gridPanel = new JPanel();
+    private final JPanel candidatesList = new JPanel();
+    private final JPanel columns = new JPanel();
+    private final JLabel currentArm = Theme.mono("—", Theme.TEXT);
+    private final JLabel currentBaseline = Theme.mono("—", Theme.TEXT);
+    private final JLabel currentScenario = Theme.mono("—", Theme.TEXT);
     private final JTextArea log = new JTextArea();
 
-    private final List<JLabel> scheduleRows = new ArrayList<>();
+    private final Map<String, CandidateRow> candidateRows = new LinkedHashMap<>();
     private final Map<String, Double> liveScores = new LinkedHashMap<>();
     private JPanel liveColumn;
+    private JPanel liveRows;
     private String baselineLabel = "baseline";
     private Set<String> baselineMods = Set.of();
 
-    private final long startedAt = System.currentTimeMillis();
+    private long startedAt;
     private long armStartedAt;
     private long armMillisTotal;
     private int armsFinished;
@@ -101,19 +102,247 @@ public final class RunnerWindow implements ExperimentListener {
     private int rounds = 1;
 
     private Timer clock;
+    private boolean running;
     private boolean paused;
 
-    private RunnerWindow(RunControl control) {
+    private RunnerWindow(RunControl control, Launcher launcher) {
         this.control = control;
+        this.launcher = launcher;
         build();
     }
 
-    /** Opens the window and returns the listener the experiment should report to. */
-    public static RunnerWindow open(RunControl control) {
-        RunnerWindow window = new RunnerWindow(control);
+    /**
+     * Opens the window on the planning view, where an operator chooses what to run.
+     *
+     * @param launcher what Start invokes; the window never builds an experiment itself
+     */
+    public static RunnerWindow open(RunControl control, Launcher launcher) {
+        Theme.install();
+        RunnerWindow window = new RunnerWindow(control, launcher);
         SwingUtilities.invokeLater(() -> window.frame.setVisible(true));
         return window;
     }
+
+    /** Opens straight into the run view, for an experiment the command line already described. */
+    public static RunnerWindow openRunning(RunControl control) {
+        RunnerWindow window = open(control, null);
+        SwingUtilities.invokeLater(window::enterRunView);
+        return window;
+    }
+
+    // --- structure ---
+
+    private void build() {
+        body.setBackground(Theme.BACKGROUND);
+        body.add(planning, "plan");
+        body.add(runView(), "run");
+
+        frame.setLayout(new BorderLayout());
+        frame.getContentPane().setBackground(Theme.BACKGROUND);
+        frame.add(topBar(), BorderLayout.NORTH);
+        frame.add(body, BorderLayout.CENTER);
+        frame.setSize(1240, 820);
+        frame.setMinimumSize(new Dimension(900, 620));
+        frame.setLocationByPlatform(true);
+
+        // Closing is a stop, not an escape: a run left headless by accident would keep the machine
+        // busy with no way to reach it.
+        frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        frame.addWindowListener(
+                new java.awt.event.WindowAdapter() {
+                    @Override
+                    public void windowClosing(java.awt.event.WindowEvent unused) {
+                        if (running) {
+                            confirmStop();
+                        } else {
+                            frame.dispose();
+                            System.exit(0);
+                        }
+                    }
+                });
+
+        clock =
+                new Timer(
+                        1000,
+                        unused -> {
+                            updateEstimate();
+                            frame.repaint();
+                        });
+    }
+
+    private JPanel topBar() {
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 12));
+        bar.setBackground(Theme.CARD);
+        bar.setBorder(javax.swing.BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.LINE));
+
+        startButton.addActionListener(unused -> onStartOrPause());
+        stopButton.addActionListener(unused -> confirmStop());
+        stopButton.setEnabled(false);
+        status.setForeground(Theme.MUTED);
+
+        bar.add(startButton);
+        bar.add(stopButton);
+        bar.add(Theme.separator());
+        bar.add(statusDot);
+        bar.add(status);
+        bar.add(Theme.separator());
+        bar.add(progress);
+        bar.add(Theme.separator());
+        bar.add(eta);
+        return bar;
+    }
+
+    private JPanel runView() {
+        JPanel view = new JPanel(new BorderLayout(12, 12));
+        view.setBackground(Theme.BACKGROUND);
+        Theme.pad(view, 12, 12, 12, 12);
+
+        candidatesList.setLayout(new BoxLayout(candidatesList, BoxLayout.Y_AXIS));
+        candidatesList.setOpaque(false);
+        JPanel candidatesCard = Theme.card("Candidates");
+        candidatesCard.add(Theme.scroll(candidatesList), BorderLayout.CENTER);
+        candidatesCard.setPreferredSize(new Dimension(260, 0));
+
+        columns.setLayout(new BoxLayout(columns, BoxLayout.X_AXIS));
+        columns.setOpaque(false);
+        JScrollPane columnScroll = Theme.scroll(columns);
+        columnScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+
+        JPanel grid = new JPanel(new BorderLayout(0, 6));
+        grid.setOpaque(false);
+        grid.add(columnScroll, BorderLayout.CENTER);
+        grid.add(
+                Theme.muted(
+                        "Ranked by improvement against the column's baseline. A band, not a score:"
+                                + " a percentage without one is noise wearing a number."),
+                BorderLayout.SOUTH);
+
+        JPanel top = new JPanel(new BorderLayout(12, 0));
+        top.setOpaque(false);
+        top.add(candidatesCard, BorderLayout.WEST);
+        top.add(grid, BorderLayout.CENTER);
+
+        JPanel bottom = new JPanel(new BorderLayout(0, 12));
+        bottom.setOpaque(false);
+        bottom.add(currentRunCard(), BorderLayout.NORTH);
+        bottom.add(logCard(), BorderLayout.CENTER);
+        bottom.setPreferredSize(new Dimension(0, 300));
+
+        view.add(top, BorderLayout.CENTER);
+        view.add(bottom, BorderLayout.SOUTH);
+        return view;
+    }
+
+    /**
+     * The three facts that decide whether the number arriving next means anything: which arm, what
+     * it is measured against, and which scenario is capturing.
+     */
+    private JPanel currentRunCard() {
+        JPanel card = Theme.card("Current run");
+        JPanel fields = new JPanel(new GridLayout(1, 3, 24, 0));
+        fields.setOpaque(false);
+        fields.add(field("Arm being tested", currentArm));
+        fields.add(field("Baseline it is measured against", currentBaseline));
+        fields.add(field("Scenario capturing", currentScenario));
+        card.add(fields, BorderLayout.CENTER);
+        return card;
+    }
+
+    private static JPanel field(String name, JLabel value) {
+        JPanel column = new JPanel();
+        column.setLayout(new BoxLayout(column, BoxLayout.Y_AXIS));
+        column.setOpaque(false);
+        JLabel label = Theme.muted(name);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        value.setAlignmentX(Component.LEFT_ALIGNMENT);
+        column.add(label);
+        column.add(Box.createVerticalStrut(4));
+        column.add(value);
+        return column;
+    }
+
+    private JPanel logCard() {
+        JPanel card = Theme.card(null);
+        card.setLayout(new BorderLayout(0, 8));
+
+        JPanel header = new JPanel(new BorderLayout());
+        header.setOpaque(false);
+        header.add(Theme.heading("Log"), BorderLayout.WEST);
+        JButton clear = Theme.button("Clear", false);
+        clear.addActionListener(unused -> log.setText(""));
+        header.add(clear, BorderLayout.EAST);
+
+        log.setEditable(false);
+        log.setFont(Theme.MONO);
+        log.setBackground(Theme.CARD);
+        log.setForeground(Theme.TEXT);
+
+        card.add(header, BorderLayout.NORTH);
+        card.add(Theme.scroll(log), BorderLayout.CENTER);
+        return card;
+    }
+
+    // --- control ---
+
+    private void onStartOrPause() {
+        if (!running) {
+            PlanningView.Choice choice = planning.choice();
+            if (choice == null) {
+                JOptionPane.showMessageDialog(
+                        frame, planning.blocker(), "Nothing to run", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            enterRunView();
+            launcher.start(choice, control, this);
+            return;
+        }
+        if (paused) {
+            control.resume();
+            paused = false;
+            startButton.setText("Pause");
+            state("Running", Theme.GOOD);
+        } else {
+            control.pause();
+            paused = true;
+            startButton.setText("Resume");
+            // Honest about the semantics: the hold happens at the boundary, not now.
+            state("Pausing after this arm", Theme.ACCENT);
+        }
+    }
+
+    private void enterRunView() {
+        running = true;
+        startedAt = System.currentTimeMillis();
+        startButton.setText("Pause");
+        stopButton.setEnabled(true);
+        state("Starting", Theme.ACCENT);
+        views.show(body, "run");
+        clock.start();
+    }
+
+    private void confirmStop() {
+        int choice =
+                JOptionPane.showConfirmDialog(
+                        frame,
+                        "Stop the run? The current game is killed, the instance restored, and the"
+                                + " report written from the arms that completed.",
+                        "Stop",
+                        JOptionPane.OK_CANCEL_OPTION);
+        if (choice == JOptionPane.OK_OPTION) {
+            control.stop();
+            state("Stopping", Theme.BAD);
+            startButton.setEnabled(false);
+            stopButton.setEnabled(false);
+        }
+    }
+
+    private void state(String text, Color colour) {
+        status.setText(text);
+        status.setForeground(colour);
+        statusDot.set(colour, true);
+    }
+
+    // --- log ---
 
     /**
      * Wraps a stream so everything the runner prints also lands in the window's log.
@@ -162,158 +391,37 @@ public final class RunnerWindow implements ExperimentListener {
         log.setCaretPosition(log.getDocument().getLength());
     }
 
-    private void build() {
-        JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 6));
-        status.setFont(status.getFont().deriveFont(Font.BOLD));
-        remaining.setForeground(MUTED);
-        top.add(status);
-        top.add(progress);
-        top.add(elapsed);
-        top.add(remaining);
-        top.add(pauseButton);
-        top.add(stopButton);
-
-        pauseButton.addActionListener(unused -> togglePause());
-        stopButton.addActionListener(unused -> confirmStop());
-
-        JPanel header = new JPanel(new BorderLayout());
-        header.add(top, BorderLayout.NORTH);
-        header.add(nowRunning(), BorderLayout.CENTER);
-
-        schedulePanel.setLayout(new BoxLayout(schedulePanel, BoxLayout.Y_AXIS));
-        schedulePanel.setBorder(BorderFactory.createTitledBorder("Schedule"));
-        JScrollPane scheduleScroll = new JScrollPane(schedulePanel);
-        scheduleScroll.setPreferredSize(new Dimension(240, 400));
-
-        gridPanel.setLayout(new BoxLayout(gridPanel, BoxLayout.X_AXIS));
-        gridPanel.setBorder(BorderFactory.createTitledBorder("Selection"));
-
-        log.setEditable(false);
-        log.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
-        JScrollPane logScroll = new JScrollPane(log);
-        logScroll.setBorder(BorderFactory.createTitledBorder("Log"));
-
-        JSplitPane centre =
-                new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(gridPanel), logScroll);
-        centre.setResizeWeight(0.55);
-
-        frame.setLayout(new BorderLayout());
-        frame.add(header, BorderLayout.NORTH);
-        frame.add(scheduleScroll, BorderLayout.WEST);
-        frame.add(centre, BorderLayout.CENTER);
-        frame.setSize(1020, 680);
-        frame.setLocationByPlatform(true);
-
-        // Closing the window is a stop, not an escape: a run left headless by accident would keep
-        // the machine busy with no way to reach it.
-        frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        frame.addWindowListener(
-                new java.awt.event.WindowAdapter() {
-                    @Override
-                    public void windowClosing(java.awt.event.WindowEvent unused) {
-                        confirmStop();
-                    }
-                });
-
-        clock =
-                new Timer(
-                        1000,
-                        unused -> {
-                            elapsed.setText(clock(System.currentTimeMillis() - startedAt));
-                            updateEstimate();
-                        });
-        clock.start();
-    }
-
-    /**
-     * What is being measured at this moment: the arm, what it is measured against, and the scenario
-     * in flight. Three facts, because those are the three that decide whether the number arriving
-     * next means anything.
-     */
-    private JPanel nowRunning() {
-        JPanel panel = new JPanel(new GridLayout(3, 1, 0, 2));
-        panel.setBorder(BorderFactory.createTitledBorder("Now running"));
-        panel.add(field("arm", currentArm));
-        panel.add(field("against", currentBaseline));
-        panel.add(field("scenario", currentScenario));
-        return panel;
-    }
-
-    private static JPanel field(String name, JLabel value) {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        JLabel label = new JLabel(name);
-        label.setForeground(MUTED);
-        label.setPreferredSize(new Dimension(64, 16));
-        value.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        row.add(label);
-        row.add(value);
-        return row;
-    }
-
-    private void togglePause() {
-        if (paused) {
-            control.resume();
-            paused = false;
-            pauseButton.setText("Pause");
-            status.setText("running");
-        } else {
-            control.pause();
-            paused = true;
-            pauseButton.setText("Resume");
-            // Honest about the semantics: the hold happens at the boundary, not now.
-            status.setText("pausing after the current run");
-        }
-    }
-
-    private void confirmStop() {
-        int choice =
-                JOptionPane.showConfirmDialog(
-                        frame,
-                        "Stop the run? The current game is killed, the instance restored, and the"
-                                + " report written from the runs that completed.",
-                        "Stop",
-                        JOptionPane.OK_CANCEL_OPTION);
-        if (choice == JOptionPane.OK_OPTION) {
-            control.stop();
-            status.setText("stopping");
-            pauseButton.setEnabled(false);
-            stopButton.setEnabled(false);
-        }
-    }
-
     // --- listener side, marshalled to the EDT ---
 
     @Override
     public void scheduleBuilt(Slate slate) {
         SwingUtilities.invokeLater(
                 () -> {
-                    schedulePanel.removeAll();
-                    scheduleRows.clear();
                     armsTotal = slate.armsTotal();
                     round = slate.round();
                     rounds = slate.rounds();
-                    for (int i = 0; i < slate.arms().size(); i++) {
-                        Arm arm = slate.arms().get(i);
-                        JLabel row =
-                                new JLabel(
-                                        String.format(
-                                                Locale.ROOT,
-                                                "%3d  %-20s %s",
-                                                i + 1,
-                                                arm.id(),
-                                                arm.kind().toString().toLowerCase(Locale.ROOT)));
-                        row.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-                        scheduleRows.add(row);
-                        schedulePanel.add(row);
+                    for (Arm arm : slate.arms()) {
                         if (arm.kind() == Arm.Kind.BASELINE && baselineMods.isEmpty()) {
-                            // The reference set the "arm" line describes candidates against.
+                            // The reference set every candidate is described against.
                             baselineMods = Set.copyOf(arm.enabled());
                         }
                     }
+                    for (Arm arm : slate.arms()) {
+                        if (arm.kind() == Arm.Kind.CANDIDATE) {
+                            candidateRows.computeIfAbsent(arm.id(), this::addCandidateRow);
+                        }
+                    }
+                    startColumn(baselineLabel);
                     updateProgress();
-                    startColumn("baseline");
                     refresh();
                 });
+    }
+
+    private CandidateRow addCandidateRow(String id) {
+        CandidateRow row = new CandidateRow(id);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        candidatesList.add(row);
+        return row;
     }
 
     @Override
@@ -321,12 +429,15 @@ public final class RunnerWindow implements ExperimentListener {
         SwingUtilities.invokeLater(
                 () -> {
                     armStartedAt = System.currentTimeMillis();
-                    mark(sequence, RUNNING, Font.BOLD);
-                    status.setText("running");
+                    state("Running", Theme.GOOD);
                     currentArm.setText(describe(arm));
                     currentBaseline.setText(
-                            arm.kind() == Arm.Kind.CANDIDATE ? baselineLabel : "— (reference run)");
+                            arm.kind() == Arm.Kind.CANDIDATE ? baselineLabel : "— reference run");
                     currentScenario.setText("starting the game");
+                    CandidateRow row = candidateRows.get(arm.id());
+                    if (row != null) {
+                        row.set("Running", Theme.ACCENT, false);
+                    }
                     updateProgress();
                     refresh();
                 });
@@ -334,8 +445,7 @@ public final class RunnerWindow implements ExperimentListener {
 
     @Override
     public void scenarioStarted(String scenarioId, int repetition) {
-        SwingUtilities.invokeLater(
-                () -> currentScenario.setText(scenarioId + "  #" + repetition));
+        SwingUtilities.invokeLater(() -> currentScenario.setText(scenarioId + "  #" + repetition));
     }
 
     @Override
@@ -347,8 +457,11 @@ public final class RunnerWindow implements ExperimentListener {
                         armStartedAt = 0;
                     }
                     armsFinished++;
-                    mark(sequence, failed ? FAILED : DONE, Font.PLAIN);
                     currentScenario.setText("—");
+                    CandidateRow row = candidateRows.get(arm.id());
+                    if (row != null) {
+                        row.set(failed ? "Failed" : "Done", failed ? Theme.BAD : Theme.GOOD, !failed);
+                    }
                     if (!failed && arm.kind() == Arm.Kind.CANDIDATE) {
                         // Provisional, in raw milliseconds; the round's close replaces it with the
                         // paired percentage, which is the number that actually means something.
@@ -376,11 +489,17 @@ public final class RunnerWindow implements ExperimentListener {
     }
 
     @Override
-    public void stateChanged(String state) {
+    public void stateChanged(String text) {
         SwingUtilities.invokeLater(
                 () -> {
-                    if (!paused || "running".equals(state)) {
-                        status.setText(state);
+                    if (paused && !"running".equals(text)) {
+                        return;
+                    }
+                    switch (text) {
+                        case "running" -> state("Running", Theme.GOOD);
+                        case "paused" -> state("Paused", Theme.ACCENT);
+                        case "stopping" -> state("Stopping", Theme.BAD);
+                        default -> state(text, Theme.MUTED);
                     }
                 });
     }
@@ -389,17 +508,18 @@ public final class RunnerWindow implements ExperimentListener {
     public void finished(SelectionReport report) {
         SwingUtilities.invokeLater(
                 () -> {
-                    status.setText(report == null ? "stopped" : "finished");
+                    running = false;
+                    state(report == null ? "Stopped" : "Finished", report == null ? Theme.BAD : Theme.GOOD);
                     currentArm.setText("—");
                     currentBaseline.setText("—");
                     currentScenario.setText("—");
-                    remaining.setText("");
+                    eta.setText("");
                     clock.stop();
-                    pauseButton.setEnabled(false);
+                    startButton.setEnabled(false);
                     stopButton.setEnabled(false);
-                    // The window stays open: the grid, schedule and log are the summary an operator
-                    // came back for, and closing now is a plain close.
-                    frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+                    // The window stays open: the columns, candidates and log are the summary an
+                    // operator came back for, and closing now is a plain close.
+                    frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
                 });
     }
 
@@ -418,25 +538,29 @@ public final class RunnerWindow implements ExperimentListener {
     }
 
     /**
-     * Extrapolated from the arms that have finished, which is the only evidence there is. Blank
-     * until one has, rather than guessing from nothing.
+     * Extrapolated from the arms that have finished, which is the only evidence there is. Shows
+     * elapsed only until one has, rather than guessing from nothing.
      */
     private void updateEstimate() {
+        long elapsed = System.currentTimeMillis() - startedAt;
         int left = Math.max(armsTotal, armsFinished) - armsFinished;
         if (armsFinished == 0 || left <= 0) {
-            remaining.setText("");
+            eta.setText("elapsed " + clock(elapsed));
             return;
         }
         long perArm = armMillisTotal / armsFinished;
         long inFlight = armStartedAt == 0 ? 0 : System.currentTimeMillis() - armStartedAt;
-        remaining.setText("~" + clock(Math.max(0, (long) left * perArm - inFlight)) + " left");
+        eta.setText(
+                "elapsed "
+                        + clock(elapsed)
+                        + "   ETA "
+                        + clock(Math.max(0, (long) left * perArm - inFlight)));
     }
 
     private static String clock(long millis) {
         long seconds = millis / 1000;
-        return seconds >= 3600
-                ? String.format(Locale.ROOT, "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
-                : String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
+        return String.format(
+                Locale.ROOT, "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60);
     }
 
     /** An arm named by what it changes, since its id alone rarely says what is being tried. */
@@ -446,93 +570,162 @@ public final class RunnerWindow implements ExperimentListener {
         Set<String> removed = new TreeSet<>(baselineMods);
         removed.removeAll(arm.enabled());
         if (added.isEmpty() && removed.isEmpty()) {
-            return arm.id() + "  (identical to the baseline stack)";
+            return arm.id() + "  (the baseline stack unchanged)";
         }
         StringBuilder text = new StringBuilder(arm.id()).append("  ");
-        added.forEach(mod -> text.append('+').append(mod).append(' '));
-        removed.forEach(mod -> text.append('-').append(mod).append(' '));
+        added.forEach(mod -> text.append('+').append(shorten(mod)).append(' '));
+        removed.forEach(mod -> text.append('-').append(shorten(mod)).append(' '));
         return text.toString().trim();
     }
 
-    // --- grid columns ---
+    private static String shorten(String fileName) {
+        return fileName.replaceFirst("\\.jar$", "");
+    }
+
+    // --- run columns ---
 
     private void startColumn(String baseline) {
         baselineLabel = baseline;
-        liveColumn = new JPanel();
-        liveColumn.setLayout(new BoxLayout(liveColumn, BoxLayout.Y_AXIS));
-        liveColumn.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        liveColumn = Theme.card(null);
+        liveColumn.setLayout(new BorderLayout(0, 8));
         liveColumn.setAlignmentY(Component.TOP_ALIGNMENT);
+        liveColumn.setPreferredSize(new Dimension(300, 320));
+        liveColumn.setMaximumSize(new Dimension(300, Integer.MAX_VALUE));
 
-        JLabel header = new JLabel(baseline);
-        header.setFont(header.getFont().deriveFont(Font.BOLD));
-        liveColumn.add(header);
-        liveColumn.add(Box.createVerticalStrut(6));
-        gridPanel.add(liveColumn);
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setOpaque(false);
+        JLabel title = Theme.heading("Run " + round);
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JLabel against = Theme.muted("Baseline: " + baseline);
+        against.setAlignmentX(Component.CENTER_ALIGNMENT);
+        header.add(title);
+        header.add(Box.createVerticalStrut(4));
+        header.add(against);
+
+        liveRows = new JPanel();
+        liveRows.setLayout(new BoxLayout(liveRows, BoxLayout.Y_AXIS));
+        liveRows.setOpaque(false);
+
+        // Rows pinned to the top of the column; a BoxLayout left to fill would spread them down it.
+        JPanel holder = new JPanel(new BorderLayout());
+        holder.setOpaque(false);
+        holder.add(liveRows, BorderLayout.NORTH);
+
+        liveColumn.add(header, BorderLayout.NORTH);
+        liveColumn.add(holder, BorderLayout.CENTER);
+        columns.add(liveColumn);
+        columns.add(Box.createHorizontalStrut(10));
     }
 
     private void renderLiveColumn() {
-        if (liveColumn == null) {
+        if (liveRows == null) {
             return;
         }
-        // Header plus strut survive; rows are rebuilt sorted, lower milliseconds first.
-        while (liveColumn.getComponentCount() > 2) {
-            liveColumn.remove(2);
-        }
+        liveRows.removeAll();
+        int[] rank = {0};
         liveScores.entrySet().stream()
                 .sorted(Map.Entry.comparingByValue())
                 .forEach(
                         entry ->
-                                liveColumn.add(
-                                        monospaced(
-                                                String.format(
-                                                        Locale.ROOT,
-                                                        "%-18s %8.2fms",
-                                                        entry.getKey(),
-                                                        entry.getValue()),
-                                                null)));
+                                liveRows.add(
+                                        resultRow(
+                                                ++rank[0],
+                                                shorten(entry.getKey()),
+                                                String.format(Locale.ROOT, "%.1f ms", entry.getValue()),
+                                                false)));
     }
 
     private void finishColumn(List<Comparison> comparisons, String promoted) {
-        if (liveColumn == null) {
+        if (liveRows == null) {
             return;
         }
-        while (liveColumn.getComponentCount() > 2) {
-            liveColumn.remove(2);
-        }
+        liveRows.removeAll();
+        int[] rank = {0};
         comparisons.stream()
                 .sorted((a, b) -> Double.compare(b.improvementPercent(), a.improvementPercent()))
                 .forEach(
-                        comparison -> {
-                            boolean winner = comparison.candidateId().equals(promoted);
-                            liveColumn.add(
-                                    monospaced(
-                                            String.format(
-                                                    Locale.ROOT,
-                                                    "%s%-16s %+6.1f%%  %s",
-                                                    winner ? "★ " : "  ",
-                                                    comparison.candidateId(),
-                                                    comparison.improvementPercent(),
-                                                    comparison.band()),
-                                            winner ? WINNER : null));
-                        });
+                        comparison ->
+                                liveRows.add(
+                                        resultRow(
+                                                ++rank[0],
+                                                shorten(comparison.candidateId()),
+                                                String.format(
+                                                        Locale.ROOT,
+                                                        "%+.1f%%  %s",
+                                                        comparison.improvementPercent(),
+                                                        band(comparison)),
+                                                comparison.candidateId().equals(promoted))));
         liveColumn = null;
+        liveRows = null;
     }
 
-    private static JLabel monospaced(String text, Color color) {
-        JLabel label = new JLabel(text);
-        label.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        if (color != null) {
-            label.setForeground(color);
-            label.setFont(label.getFont().deriveFont(Font.BOLD));
+    private static String band(Comparison comparison) {
+        return comparison.band().toString().toLowerCase(Locale.ROOT).replace('_', ' ');
+    }
+
+    /**
+     * One candidate's entry inside a column: rank and name, then what it measured beneath.
+     *
+     * <p>Two lines rather than one. A band is several words long, and a band is the part that says
+     * whether the percentage above it means anything — so it is the line that must not be the one
+     * truncated to fit.
+     */
+    private static JPanel resultRow(int rank, String name, String value, boolean winner) {
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.Y_AXIS));
+        row.setBackground(winner ? new Color(0x17321F) : Theme.RAISED);
+        row.setBorder(
+                javax.swing.BorderFactory.createCompoundBorder(
+                        new Theme.RoundedBorder(winner ? Theme.GOOD : Theme.LINE, 8),
+                        javax.swing.BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 56));
+
+        JLabel title = new JLabel((winner ? "★ " : rank + ".  ") + name);
+        title.setForeground(winner ? Theme.GOOD : Theme.TEXT);
+        title.setFont(title.getFont().deriveFont(winner ? Font.BOLD : Font.PLAIN, 12f));
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel detail = Theme.mono(value, winner ? Theme.GOOD : Theme.MUTED);
+        detail.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        row.add(title);
+        row.add(Box.createVerticalStrut(2));
+        row.add(detail);
+        return row;
+    }
+
+    /** One line in the left-hand candidate list: name over state, with a dot for the state. */
+    private static final class CandidateRow extends JPanel {
+
+        private final JLabel state = Theme.muted("Queued");
+        private final Theme.Dot dot = new Theme.Dot(Theme.MUTED, false);
+
+        CandidateRow(String id) {
+            setLayout(new BorderLayout(8, 0));
+            setOpaque(false);
+            setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 6, 4));
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
+
+            JPanel text = new JPanel();
+            text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
+            text.setOpaque(false);
+            JLabel name = new JLabel(shorten(id));
+            name.setForeground(Theme.TEXT);
+            name.setAlignmentX(Component.LEFT_ALIGNMENT);
+            state.setAlignmentX(Component.LEFT_ALIGNMENT);
+            text.add(name);
+            text.add(state);
+
+            add(text, BorderLayout.CENTER);
+            add(dot, BorderLayout.EAST);
         }
-        return label;
-    }
 
-    private void mark(int sequence, Color color, int style) {
-        if (sequence < scheduleRows.size()) {
-            JLabel row = scheduleRows.get(sequence);
-            row.setForeground(color);
-            row.setFont(row.getFont().deriveFont(style));
+        void set(String text, Color colour, boolean filled) {
+            state.setText(text);
+            state.setForeground(colour);
+            dot.set(colour, filled);
         }
     }
 

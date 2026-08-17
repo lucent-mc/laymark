@@ -163,10 +163,19 @@ Verified end to end with the full modded pack, through world creation and entry.
 
 ### 5.3b Runner GUI
 
-The runner has a **GUI, opt-in via `--gui`**, alongside the headless mode unattended runs use.
-"No interactive CLI" stands: arguments configure the run, and the GUI observes and controls it —
-it never prompts for configuration.
+The runner has a **GUI**, alongside the headless mode unattended runs use. It opens two ways:
+**`--gui`** attaches a window to the run the arguments already describe, and **launching with no
+arguments at all** — double-clicking the jar — opens the planning view first.
 
+"No interactive CLI" stands. The planning view is the one place Laymark's GUI configures anything,
+and it exists so the tool can be opened by someone who does not have the flags memorised; every
+choice it offers has a flag equivalent and both reach the same experiment. Once **Start** is
+pressed the window only observes and controls, and Start becomes Pause.
+
+- **Planning**: the instance (launcher profile and version), the capture window, repeats per arm,
+  render distance, and a **checklist of the mods currently installed**. A checked mod becomes a
+  candidate, so the baseline is the pack with every candidate withheld and each arm is "with it"
+  against "without it" — not against the pack as found.
 - **Status**: current state, progress as **`18/28 arms in 4/7 runs`** (arms are launches, runs are
   selection rounds — §8.1), elapsed time, and estimated time remaining. The estimate is
   extrapolated from the arms that have finished and is blank until one has.
@@ -179,17 +188,22 @@ it never prompts for configuration.
   summary statistics for the run in flight** — no single live number distinguishes a real
   improvement from noise, and one shown beside the grid would be read as the answer. The paired
   comparison is the answer.
-- **The schedule**, every arm in order with its state (pending / running / done / failed). Read-only:
-  arguments decide what runs, so there is nothing here to add, remove, reorder or re-sort.
-- **The selection grid**: one column per round, candidates sorted by score within the column, the
-  round's winner marked — and shown as the **next column's baseline**, so the grid reads as the
-  greedy selection it depicts.
+- **The candidate list**, every candidate with its state (queued / running / done / failed).
+  Read-only once started: the plan decides what runs, so there is nothing here to add, remove,
+  reorder or re-sort mid-experiment.
+- **The selection grid**: one column per round, candidates ranked within the column, each shown with
+  **its band as well as its percentage**, the round's winner marked — and shown as the **next
+  column's baseline**, so the grid reads as the greedy selection it depicts.
 - **The log**, the runner's console output teed into the window, so the operator never has to leave
   it for the terminal.
 
-Swing, deliberately: it ships in the JDK, so the runner stays a single shaded jar with no toolkit
-dependency, and the GUI cannot end up beneath a published number — it runs in the runner process,
-never the game's.
+With a window attached the process **does not exit on a failing verdict**. The exit code has no
+audience there, and taking the process down closes the report someone opened the window to read.
+
+Swing, in the runner's process and never the game's, so the GUI cannot end up beneath a published
+number. Its one dependency is **FlatLaf**, a look-and-feel: still no toolkit, still one jar, and
+still nothing loaded into the measured JVM. Restyling every scroll bar and check box by hand would
+be more code arriving somewhere worse.
 
 ### 5.4 Runner ↔ harness protocol
 

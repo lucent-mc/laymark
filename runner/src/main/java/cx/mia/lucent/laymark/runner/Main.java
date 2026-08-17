@@ -46,8 +46,13 @@ public final class Main {
     public static void main(String[] args) {
         Map<String, String> options = parse(args);
 
-        if (options.containsKey("help") || options.isEmpty()) {
+        if (options.containsKey("help")) {
             usage();
+            return;
+        }
+        if (options.isEmpty()) {
+            // Double-clicking the jar lands here. Nothing was said about what to run, so ask.
+            plannedRun();
             return;
         }
 
@@ -74,7 +79,7 @@ public final class Main {
             RunControl control = new RunControl();
             ExperimentListener listener = ExperimentListener.none();
             if (options.containsKey("gui")) {
-                var window = cx.mia.lucent.laymark.runner.gui.RunnerWindow.open(control);
+                var window = cx.mia.lucent.laymark.runner.gui.RunnerWindow.openRunning(control);
                 listener = window;
                 // Tee rather than plumb a log callback through every layer: the runner already
                 // says everything worth showing on stdout, and a window that shows less than the
@@ -83,8 +88,20 @@ public final class Main {
                 System.setErr(window.tee(System.err));
             }
 
+            // With a window attached the exit code has no audience, and taking the process down
+            // closes the report someone opened the window to read.
+            boolean windowed = options.containsKey("gui");
+
             if (options.containsKey("selftest")) {
-                selfTest(instance, plan, outputDirectory, sceneRoot(options), options, control, listener);
+                selfTest(
+                        instance,
+                        plan,
+                        outputDirectory,
+                        sceneRoot(options),
+                        options,
+                        control,
+                        listener,
+                        windowed);
                 return;
             }
 
@@ -109,7 +126,7 @@ public final class Main {
 
             BenchmarkRun.print(result);
             System.out.printf("%nresults written to %s%n", outputDirectory);
-            if (!result.complete()) {
+            if (!result.complete() && !windowed) {
                 // A partial run is not a successful run, and an unattended schedule chaining
                 // invocations has nothing to read but the exit code.
                 System.exit(2);
@@ -124,6 +141,90 @@ public final class Main {
         } catch (Exception e) {
             System.err.println("failed: " + e);
             System.exit(1);
+        }
+    }
+
+    /**
+     * Opens the planning window and runs whatever it is told to run.
+     *
+     * <p>The invocation with no arguments, which is what double-clicking the jar produces. Every
+     * choice the window offers has a flag equivalent, and both end at the same {@code
+     * ExperimentRun.execute} — so a run planned in the window is the run those flags describe.
+     */
+    private static void plannedRun() {
+        RunControl control = new RunControl();
+        var window =
+                cx.mia.lucent.laymark.runner.gui.RunnerWindow.open(
+                        control,
+                        (choice, runControl, listener) ->
+                                Thread.ofPlatform()
+                                        .name("laymark-experiment")
+                                        .start(() -> execute(choice, runControl, listener)));
+        System.setOut(window.tee(System.out));
+        System.setErr(window.tee(System.err));
+    }
+
+    /** One planned experiment: baseline against each chosen candidate, bracketed and repeated. */
+    private static void execute(
+            cx.mia.lucent.laymark.runner.gui.PlanningView.Choice choice,
+            RunControl control,
+            ExperimentListener listener) {
+        try {
+            String runId = LocalDateTime.now().format(RUN_ID);
+            Path outputDirectory =
+                    Path.of("benchmark-results").resolve(runId).toAbsolutePath();
+
+            Map<String, String> options =
+                    Map.of(
+                            "duration", String.valueOf(choice.captureSeconds()),
+                            "render-distance", String.valueOf(choice.renderDistance()));
+            RunPlan plan = configFromFlags(options).resolve(runId, outputDirectory.toString());
+
+            var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(
+                    choice.instance().gameDirectory());
+            var installed = mods.read().enabledNames();
+            var baseline = new java.util.TreeSet<>(installed);
+            baseline.removeAll(choice.candidates());
+
+            var arms = new java.util.ArrayList<cx.mia.lucent.laymark.core.experiment.Arm>();
+            arms.add(
+                    new cx.mia.lucent.laymark.core.experiment.Arm(
+                            "acclimation",
+                            cx.mia.lucent.laymark.core.experiment.Arm.Kind.ACCLIMATION,
+                            baseline));
+            // Bracketed: a baseline before every sweep of candidates, so drift across the session
+            // shows up in the baselines rather than in whichever candidate ran late.
+            for (int repeat = 0; repeat < choice.repetitions(); repeat++) {
+                arms.add(
+                        new cx.mia.lucent.laymark.core.experiment.Arm(
+                                "baseline",
+                                cx.mia.lucent.laymark.core.experiment.Arm.Kind.BASELINE,
+                                baseline));
+                for (String candidate : choice.candidates()) {
+                    var enabled = new java.util.TreeSet<>(baseline);
+                    enabled.add(candidate);
+                    arms.add(
+                            new cx.mia.lucent.laymark.core.experiment.Arm(
+                                    candidate,
+                                    cx.mia.lucent.laymark.core.experiment.Arm.Kind.CANDIDATE,
+                                    enabled));
+                }
+            }
+
+            ExperimentRun.execute(
+                    choice.instance(),
+                    plan,
+                    arms,
+                    choice.candidates(),
+                    outputDirectory,
+                    Path.of("").toAbsolutePath(),
+                    Duration.ofSeconds(900),
+                    control,
+                    listener);
+            System.out.printf("%nreport written to %s%n", outputDirectory.resolve("report.md"));
+        } catch (Exception e) {
+            System.err.println("failed: " + e);
+            listener.finished(null);
         }
     }
 
@@ -160,7 +261,8 @@ public final class Main {
             Path sceneRoot,
             Map<String, String> options,
             RunControl control,
-            ExperimentListener listener)
+            ExperimentListener listener,
+            boolean windowed)
             throws java.io.IOException {
 
         var mods = new cx.mia.lucent.laymark.runner.materialize.ModsDirectory(instance.gameDirectory());
@@ -204,7 +306,10 @@ public final class Main {
         System.out.printf("%nself-test: %d runs, %d voided window(s)%n", arms, report.voids().size());
         if (report.comparisons().isEmpty()) {
             System.out.println("FAILED: nothing was compared, so nothing was tested");
-            System.exit(2);
+            if (!windowed) {
+                System.exit(2);
+            }
+            return;
         }
         boolean clean = true;
         for (var comparison : report.comparisons()) {
@@ -217,7 +322,7 @@ public final class Main {
                 clean
                         ? "PASSED: no identical run beat another"
                         : "FAILED: an identical run was reported as different");
-        if (!clean) {
+        if (!clean && !windowed) {
             System.exit(2);
         }
         System.out.printf("report written to %s%n", outputDirectory.resolve("report.md"));
