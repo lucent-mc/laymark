@@ -47,6 +47,11 @@ public final class PlanningView extends JPanel {
             int repetitions,
             int renderDistance) {}
 
+    private static final String NO_VERSION = "— pick one —";
+    private static final String VERSION_KEY = "version.";
+    private static final java.util.prefs.Preferences PREFERENCES =
+            java.util.prefs.Preferences.userRoot().node("cx/mia/lucent/laymark");
+
     private final JComboBox<String> profiles = new JComboBox<>();
     private final JComboBox<String> versions = new JComboBox<>();
     private final JSpinner captureSeconds = new JSpinner(new SpinnerNumberModel(30, 5, 600, 5));
@@ -56,9 +61,28 @@ public final class PlanningView extends JPanel {
     private final JPanel modList = new JPanel();
     private final JLabel modCount = Theme.muted("");
     private final Map<String, JCheckBox> mods = new LinkedHashMap<>();
-    private final Path root = ModrinthInstance.defaultRoot();
+    private final Path root;
+    private final String hereProfile;
+
+    /**
+     * The profile the runner is sitting in, or null if it is not sitting in one.
+     *
+     * <p>The jar lives at an instance root (§5.3), so double-clicking it starts the process with
+     * that instance as the working directory — which is a far better guess at what someone wants to
+     * benchmark than whichever profile sorts first.
+     */
+    private static String profileHere(Path here) {
+        Path parent = here.getParent();
+        return parent != null && parent.getFileName().toString().equals("profiles")
+                ? here.getFileName().toString()
+                : null;
+    }
 
     PlanningView() {
+        Path here = Path.of("").toAbsolutePath().normalize();
+        hereProfile = profileHere(here);
+        root = hereProfile == null ? ModrinthInstance.defaultRoot() : here.getParent().getParent();
+
         setLayout(new BorderLayout(12, 12));
         setBackground(Theme.BACKGROUND);
         Theme.pad(this, 12, 12, 12, 12);
@@ -66,13 +90,23 @@ public final class PlanningView extends JPanel {
         add(instanceCard(), BorderLayout.NORTH);
         add(candidatesCard(), BorderLayout.CENTER);
 
-        profiles.addActionListener(unused -> reloadMods());
+        profiles.addActionListener(
+                unused -> {
+                    recallVersion();
+                    reloadMods();
+                });
         for (String profile : directories(root.resolve("profiles"))) {
             profiles.addItem(profile);
         }
+        versions.addItem(NO_VERSION);
         for (String version : directories(root.resolve("meta").resolve("versions"))) {
             versions.addItem(version);
         }
+        if (hereProfile != null) {
+            profiles.setSelectedItem(hereProfile);
+        }
+        versions.addActionListener(unused -> rememberVersion());
+        recallVersion();
         reloadMods();
     }
 
@@ -148,6 +182,37 @@ public final class PlanningView extends JPanel {
         repaint();
     }
 
+    /**
+     * Which version a profile runs is recorded only in the launcher's own database, which Laymark
+     * does not read — so it is never guessed. Newest-installed is a plausible-looking wrong answer,
+     * and the failure it produces is a whole game launched on the wrong version.
+     *
+     * <p>Asked once per profile and remembered after that.
+     */
+    private void recallVersion() {
+        String profile = (String) profiles.getSelectedItem();
+        String remembered = profile == null ? null : PREFERENCES.get(VERSION_KEY + profile, null);
+        versions.setSelectedItem(
+                remembered != null && contains(versions, remembered) ? remembered : NO_VERSION);
+    }
+
+    private void rememberVersion() {
+        String profile = (String) profiles.getSelectedItem();
+        String version = (String) versions.getSelectedItem();
+        if (profile != null && version != null && !NO_VERSION.equals(version)) {
+            PREFERENCES.put(VERSION_KEY + profile, version);
+        }
+    }
+
+    private static boolean contains(JComboBox<String> combo, String item) {
+        for (int i = 0; i < combo.getItemCount(); i++) {
+            if (item.equals(combo.getItemAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void updateCount() {
         modCount.setText(selected().size() + " of " + mods.size() + " selected");
     }
@@ -187,7 +252,7 @@ public final class PlanningView extends JPanel {
     Choice choice() {
         String profile = (String) profiles.getSelectedItem();
         String version = (String) versions.getSelectedItem();
-        if (profile == null || version == null || selected().isEmpty()) {
+        if (profile == null || version == null || NO_VERSION.equals(version) || selected().isEmpty()) {
             return null;
         }
         return new Choice(
@@ -203,8 +268,14 @@ public final class PlanningView extends JPanel {
         if (profiles.getSelectedItem() == null) {
             return "No Modrinth profile found under " + root + ".";
         }
-        if (versions.getSelectedItem() == null) {
+        Object version = versions.getSelectedItem();
+        if (version == null) {
             return "No installed version found under " + root + "/meta/versions.";
+        }
+        if (NO_VERSION.equals(version)) {
+            return "Pick the game version this profile runs. Laymark does not read the launcher's"
+                    + " database, so it will not guess — and the wrong guess launches the wrong"
+                    + " game. It is remembered after the first time.";
         }
         return "Check at least one mod to benchmark.";
     }
