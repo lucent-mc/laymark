@@ -4,11 +4,20 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
-import cx.mia.lucent.laymark.core.plan.ScenarioSpec;
+import cx.mia.lucent.laymark.core.Phase;
+import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
+import cx.mia.lucent.laymark.core.scenario.ScenarioConfig;
+import cx.mia.lucent.laymark.core.scenario.PresetRef;
+import cx.mia.lucent.laymark.core.scenario.ScenarioDefinition;
+import cx.mia.lucent.laymark.core.scenario.StopSpec;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.runner.launch.LaunchException;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -66,6 +75,7 @@ public final class Main {
                             instance,
                             plan,
                             outputDirectory,
+                            sceneRoot(options),
                             Duration.ofSeconds(
                                     Long.parseLong(options.getOrDefault("timeout", "900"))));
 
@@ -90,18 +100,44 @@ public final class Main {
     }
 
     /**
-     * The single-scenario plan 0.x can express.
+     * Resolves the scenarios to run into a plan.
      *
-     * <p>Config-driven plans, multiple scenarios and named presets arrive with the experiment
-     * model. Until then this is deliberately one hard-coded shape rather than a half-built config
-     * format nobody has needed yet.
+     * <p>A {@code --config} file is the real path; the flags below build an equivalent one-scenario
+     * config when none is given, so a quick invocation stays a quick invocation. Either way the
+     * plan is produced by the same resolution, so what a flag means and what a config field means
+     * cannot drift apart.
+     *
+     * <p>Laymark ships no scenarios of its own. What to measure is the operator's decision.
      */
     private static RunPlan plan(String runId, Path outputDirectory, Map<String, String> options) {
-        long seed = Long.parseLong(options.getOrDefault("seed", "1"));
-        Duration capture =
-                Duration.ofSeconds(Long.parseLong(options.getOrDefault("duration", "30")));
-        int renderDistance = Integer.parseInt(options.getOrDefault("render-distance", "12"));
+        ScenarioConfig config =
+                options.containsKey("config")
+                        ? readConfig(Path.of(options.get("config")))
+                        : configFromFlags(options);
+        return config.resolve(runId, outputDirectory.toString());
+    }
 
+    /** Scene paths are relative to the config that declared them, or to the working directory. */
+    private static Path sceneRoot(Map<String, String> options) {
+        Path config = options.containsKey("config") ? Path.of(options.get("config")) : null;
+        Path parent = config == null ? null : config.toAbsolutePath().getParent();
+        return parent == null ? Path.of("").toAbsolutePath() : parent;
+    }
+
+    private static ScenarioConfig readConfig(Path path) {
+        if (!Files.isRegularFile(path)) {
+            throw new LaunchException("no scenario config at " + path);
+        }
+        try {
+            return ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new UncheckedIOException("could not read " + path, e);
+        }
+    }
+
+    /** The one-scenario shape the flags describe. */
+    private static ScenarioConfig configFromFlags(Map<String, String> options) {
+        int renderDistance = Integer.parseInt(options.getOrDefault("render-distance", "12"));
         Preset defaults = Preset.defaults();
         Preset preset =
                 new Preset(
@@ -115,17 +151,22 @@ public final class Main {
                         defaults.biomeBlendRadius(),
                         defaults.fieldOfView());
 
-        ScenarioSpec scenario =
-                new ScenarioSpec(
+        long captureMillis =
+                Duration.ofSeconds(Long.parseLong(options.getOrDefault("duration", "30")))
+                        .toMillis();
+
+        return ScenarioConfig.of(
+                new ScenarioDefinition(
                         "resident-render",
                         List.of(),
-                        new StopCondition.FixedDuration(capture.toMillis()),
+                        List.of(Phase.RESIDENT_RENDER),
+                        StopSpec.of(StopCondition.Kind.TIME, captureMillis, 0),
                         Integer.parseInt(options.getOrDefault("repetitions", "1")),
-                        preset,
+                        PresetRef.inline(preset),
                         Pose.lookingDown(0.5, OBSERVATION_ALTITUDE, 0.5),
-                        seed);
-
-        return RunPlan.of(runId, outputDirectory.toString(), List.of(scenario));
+                        Long.parseLong(options.getOrDefault("seed", "1")),
+                        false,
+                        List.of()));
     }
 
     private static String required(Map<String, String> options, String name) {
@@ -163,7 +204,9 @@ public final class Main {
 
                 Runs one scenario in a disposable world and reports its frame-time distribution.
 
-                  --profile <name>        Modrinth App profile directory name (required)
+                  --config <path>         scenario config to run; without it the flags below
+                          describe a single resident-render scenario
+  --profile <name>        Modrinth App profile directory name (required)
                   --version <id>          version id, e.g. 26.1.2-26.1.2.95 (required)
                   --root <path>           Modrinth App data directory (default: platform location)
                   --out <path>            results root (default: benchmark-results)

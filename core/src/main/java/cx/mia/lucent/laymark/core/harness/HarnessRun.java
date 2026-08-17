@@ -7,6 +7,7 @@ import cx.mia.lucent.laymark.core.plan.ScenarioSpec;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.RunResult;
+import cx.mia.lucent.laymark.core.result.PhaseResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -91,14 +92,41 @@ public final class HarnessRun {
 
     private ScenarioResult measure(
             ScenarioSpec scenario, int repetition, WorldSpec world, long startedAt) {
+        List<PhaseResult> segments = new ArrayList<>();
+
         // Settings first. Render distance decides how much work world load itself does, so
         // applying it afterwards would measure a load the preset never governed.
         port.applyPreset(scenario.preset());
-        port.createWorld(world);
 
-        events.accept(
-                new Frame.PhaseEntered(scenario.id(), Phase.SPAWN_GENERATION, System.nanoTime()));
-        port.awaitReady(READY_TIMEOUT);
+        // Spawn generation is bracketed around world creation rather than started after it: the
+        // cost mods target is the creation itself, and a window opened once the world exists has
+        // already missed it. Its end is the barrier, not a target anyone configures.
+        boolean measuringSpawn = scenario.measure().contains(Phase.SPAWN_GENERATION);
+        long spawnStartedAt = System.nanoTime();
+        if (measuringSpawn) {
+            events.accept(
+                    new Frame.PhaseEntered(scenario.id(), Phase.SPAWN_GENERATION, spawnStartedAt));
+            port.beginCapture();
+        }
+
+        port.createWorld(world);
+        BarrierReport barrier = port.awaitReady(READY_TIMEOUT);
+
+        if (measuringSpawn) {
+            Measurement spawn = port.endCapture();
+            segments.add(
+                    new PhaseResult(
+                            Phase.SPAWN_GENERATION,
+                            spawn,
+                            throttleFlags(spawn),
+                            Duration.ofNanos(System.nanoTime() - spawnStartedAt).toMillis()));
+        }
+
+        if (!scenario.content().isEmpty()) {
+            // Before positioning and before the barrier is re-confirmed: placing geometry changes
+            // what there is to build, so a barrier satisfied beforehand says nothing about after.
+            port.placeContent(scenario.content());
+        }
         port.position(scenario.pose());
 
         // After applying and loading, not before: the world load runs arbitrary mod code, and a
@@ -106,21 +134,69 @@ public final class HarnessRun {
         PresetReadback readback = port.readPreset(scenario.preset());
         List<String> flags = new ArrayList<>(readback.deviationsFrom(scenario.preset()));
 
-        events.accept(
-                new Frame.PhaseEntered(scenario.id(), Phase.RESIDENT_RENDER, System.nanoTime()));
-        Measurement measurement = port.capture(captureWindow(scenario));
-        if (!measurement.measured()) {
-            throw new HarnessException("scenario " + scenario.id() + " captured no frames");
+        for (Phase phase : scenario.measure()) {
+            if (phase == Phase.SPAWN_GENERATION) {
+                continue; // already captured, around world creation
+            }
+            requireNegativePrecondition(scenario, phase);
+
+            long phaseStartedAt = System.nanoTime();
+            events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
+            Measurement measurement = port.capture(scenario.stopCondition());
+            if (!measurement.measured()) {
+                throw new HarnessException(
+                        "scenario " + scenario.id() + " captured no frames for " + phase);
+            }
+            segments.add(
+                    new PhaseResult(
+                            phase,
+                            measurement,
+                            throttleFlags(measurement),
+                            Duration.ofNanos(System.nanoTime() - phaseStartedAt).toMillis()));
         }
-        flags.addAll(throttleFlags(measurement));
 
         return ScenarioResult.completed(
                 scenario.id(),
                 repetition,
                 readback,
                 flags,
-                measurement,
+                segments,
+                barrier,
                 Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
+    }
+
+    /**
+     * Fails the repetition if the work being measured has already happened.
+     *
+     * <p>Two of the four phases have this hazard, and it is the most dangerous failure mode in the
+     * whole harness: a traversal whose target was already generated, or a streaming phase whose
+     * sections are already meshed, <strong>completes normally and reports flatteringly good
+     * numbers</strong>. There is nothing in the output to distinguish it from a genuinely fast
+     * stack, so it fails the repetition rather than flagging it.
+     */
+    private void requireNegativePrecondition(ScenarioSpec scenario, Phase phase) {
+        switch (phase) {
+            case UNGENERATED_TRAVERSAL -> {
+                if (!port.targetIsUngenerated(scenario.pose())) {
+                    throw new HarnessException(
+                            "scenario " + scenario.id()
+                                    + " measures generation, but its target was already generated;"
+                                    + " measuring it would report a cost that was already paid");
+                }
+            }
+            case GENERATED_STREAMING -> {
+                if (!port.targetHasNoBuiltSections(scenario.pose())) {
+                    throw new HarnessException(
+                            "scenario " + scenario.id()
+                                    + " measures client streaming, but the target is already"
+                                    + " meshed; the work it exists to time has already happened");
+                }
+            }
+            // Spawn generation is guaranteed fresh by construction -- every repetition creates its
+            // own save -- and resident render is the one phase where "already finished" is the
+            // point rather than a hazard.
+            case SPAWN_GENERATION, RESIDENT_RENDER -> {}
+        }
     }
 
     /**
@@ -131,23 +207,29 @@ public final class HarnessRun {
      * has a ceiling in the middle of it, and only the reader can judge what that is worth.
      */
     private static List<String> throttleFlags(Measurement measurement) {
-        return measurement.throttlesObserved().stream()
-                .filter(throttle -> throttle != Throttle.NONE)
-                .map(throttle -> "framerate was throttled during the capture: " + throttle)
-                .toList();
+        List<String> flags =
+                new ArrayList<>(
+                        measurement.throttlesObserved().stream()
+                                .filter(throttle -> throttle != Throttle.NONE)
+                                .map(t -> "framerate was throttled during the capture: " + t)
+                                .toList());
+
+        if (measurement.serverWindowOverrunsCapture()) {
+            // Spark's statistics are a rolling window, not a capture-scoped aggregate. A capture
+            // shorter than that window reports server numbers that partly describe world creation
+            // and the previous scenario's teardown.
+            flags.add(
+                    "server statistics cover a "
+                            + measurement.spark().windowMillis()
+                            + "ms window but the capture was only "
+                            + measurement.captureMillis()
+                            + "ms, so they include time from before it");
+        }
+        return flags;
     }
 
-    private static Duration captureWindow(ScenarioSpec scenario) {
-        if (scenario.stopCondition() instanceof StopCondition.FixedDuration fixed) {
-            return fixed.duration();
-        }
-        // Completion-targeted scenarios need a channel that reports progress, which arrives with
-        // the measurement channels. Failing the scenario says so; silently capturing for some
-        // default window would produce a number that looks like an answer to a different question.
-        throw new HarnessException(
-                "scenario "
-                        + scenario.id()
-                        + " uses a completion target, which this version cannot yet measure");
+    private static StopCondition captureWindow(ScenarioSpec scenario) {
+        return scenario.stopCondition();
     }
 
     private void discard(WorldSpec world) {

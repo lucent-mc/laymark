@@ -11,6 +11,7 @@ import cx.mia.lucent.laymark.core.plan.StopCondition;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -25,11 +26,21 @@ class HarnessRunTest {
         return new ScenarioSpec(
                 id,
                 List.of(),
-                new StopCondition.FixedDuration(5_000),
+                new StopCondition(StopCondition.Kind.TIME, 5_000, 0),
                 repetitions,
                 Preset.defaults(),
                 Pose.lookingDown(100.5, 120, -64.5),
-                42L);
+                42L,
+                List.of(Phase.RESIDENT_RENDER),
+                false,
+                List.of());
+    }
+
+    private List<Phase> phasesEntered() {
+        return frames.stream()
+                .filter(Frame.PhaseEntered.class::isInstance)
+                .map(f -> ((Frame.PhaseEntered) f).phase())
+                .toList();
     }
 
     private RunResult run(ScenarioSpec... scenarios) {
@@ -91,14 +102,10 @@ class HarnessRunTest {
     void emitsTheScenarioLifecycleInOrder() {
         run(scenario("resident", 1));
         assertEquals(
-                List.of("ScenarioStarted", "PhaseEntered", "PhaseEntered", "ScenarioFinished"),
-                frames.stream().map(f -> f.getClass().getSimpleName()).toList());
-        List<Phase> phases =
-                frames.stream()
-                        .filter(Frame.PhaseEntered.class::isInstance)
-                        .map(f -> ((Frame.PhaseEntered) f).phase())
-                        .toList();
-        assertEquals(List.of(Phase.SPAWN_GENERATION, Phase.RESIDENT_RENDER), phases);
+                List.of("ScenarioStarted", "PhaseEntered", "ScenarioFinished"),
+                frames.stream().map(f -> f.getClass().getSimpleName()).toList(),
+                "nothing is measured implicitly, so only the declared phase is entered");
+        assertEquals(List.of(Phase.RESIDENT_RENDER), phasesEntered());
     }
 
     @Test
@@ -142,20 +149,152 @@ class HarnessRunTest {
         ScenarioResult only = run(scenario("resident", 1)).scenarios().get(0);
 
         assertEquals(ScenarioResult.Outcome.COMPLETED_WITH_FLAGS, only.outcome());
-        assertTrue(only.flags().toString().contains("SHORT_AFK"), only.flags().toString());
+        assertTrue(
+                only.segments().get(0).flags().toString().contains("SHORT_AFK"),
+                "a throttle belongs to the phase it happened in, not to the scenario");
         assertTrue(only.measured(), "throttled samples are still samples, just qualified ones");
+    }
+
+    /**
+     * Spark reports a rolling window. A capture shorter than it gets server numbers that partly
+     * describe world creation -- observed on a real run as a doubled server mean.
+     */
+    @Test
+    void flagsServerStatisticsWiderThanTheCaptureTheyDescribe() {
+        port.framesPerCapture = 10; // ~80ms of frames against Spark's 10s window
+
+        ScenarioResult only = run(scenario("short", 1)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.COMPLETED_WITH_FLAGS, only.outcome());
+        assertTrue(
+                only.segments().get(0).flags().toString().contains("include time from before it"),
+                only.segments().get(0).flags().toString());
+    }
+
+    /** A chunk target in a phase that loads no chunks can never complete; catch it at parse. */
+    @Test
+    void refusesAChunkTargetOnTheResidentRenderPhase() {
+        cx.mia.lucent.laymark.core.plan.PlanException e =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        cx.mia.lucent.laymark.core.plan.PlanException.class,
+                        () ->
+                                new ScenarioSpec(
+                                        "impossible",
+                                        List.of(),
+                                        new StopCondition(StopCondition.Kind.CHUNKS, 289, 60_000),
+                                        1,
+                                        Preset.defaults(),
+                                        Pose.lookingDown(0.5, 200, 0.5),
+                                        1L,
+                                        List.of(Phase.RESIDENT_RENDER),
+                                        false,
+                                        List.of()));
+        assertTrue(e.getMessage().contains("never be reached"), e.getMessage());
     }
 
     /** Every channel reaches the result, whatever the scenario asked to be scored on. */
     @Test
     void recordsEveryChannelNotJustTheScoredOne() {
-        Measurement measurement = run(scenario("resident", 1)).scenarios().get(0).measurement();
+        Measurement measurement =
+                run(scenario("resident", 1)).scenarios().get(0).segments().get(0).measurement();
 
         assertFalse(measurement.frames().isEmpty());
         assertFalse(measurement.gpu().isEmpty(), "gpu timings are recorded, not requested");
         assertEquals(20.0, measurement.spark().ticksPerSecond());
         assertEquals(new WorkCounters(40, 60, 80), measurement.work());
         assertTrue(measurement.millisPerChunkReceived() > 0, "the duration-independent quantity");
+    }
+
+    private static ScenarioSpec phased(String id, Phase phase) {
+        return new ScenarioSpec(
+                id,
+                List.of(),
+                new StopCondition(StopCondition.Kind.TIME, 5_000, 0),
+                1,
+                Preset.defaults(),
+                Pose.lookingDown(0.5, 200, 0.5),
+                7L,
+                List.of(phase),
+                false,
+                List.of());
+    }
+
+    /**
+     * The most dangerous failure mode in the harness: a traversal whose target was already
+     * generated completes normally and reports flatteringly good numbers, and nothing in the
+     * output distinguishes it from a genuinely fast stack.
+     */
+    @Test
+    void failsATraversalWhoseTargetWasAlreadyGenerated() {
+        port.targetUngenerated = false;
+
+        ScenarioResult only =
+                run(phased("traversal", Phase.UNGENERATED_TRAVERSAL)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.FAILED, only.outcome());
+        assertTrue(only.failureReason().contains("already generated"), only.failureReason());
+        assertFalse(port.calls.contains("capture"), "it must not measure a cost already paid");
+    }
+
+    @Test
+    void failsAStreamingPhaseWhoseTargetIsAlreadyMeshed() {
+        port.targetUnmeshed = false;
+
+        ScenarioResult only =
+                run(phased("streaming", Phase.GENERATED_STREAMING)).scenarios().get(0);
+
+        assertEquals(ScenarioResult.Outcome.FAILED, only.outcome());
+        assertTrue(only.failureReason().contains("already"), only.failureReason());
+        assertFalse(port.calls.contains("capture"));
+    }
+
+    /** Resident render's whole point is that everything already finished. */
+    @Test
+    void doesNotImposeANegativePreconditionOnPhasesWithoutOne() {
+        run(phased("resident", Phase.RESIDENT_RENDER));
+
+        assertFalse(port.calls.contains("targetIsUngenerated"));
+        assertFalse(port.calls.contains("targetHasNoBuiltSections"));
+        assertTrue(port.calls.contains("capture"));
+    }
+
+    @Test
+    void reportsTheDeclaredPhaseRatherThanAFixedOne() {
+        run(phased("traversal", Phase.UNGENERATED_TRAVERSAL));
+
+        assertEquals(List.of(Phase.UNGENERATED_TRAVERSAL), phasesEntered());
+    }
+
+    /** Geometry changes what there is to build, so a barrier satisfied before it means nothing. */
+    @Test
+    void placesSceneContentBeforePositioningAndMeasuring() {
+        ScenarioSpec withScene =
+                new ScenarioSpec(
+                        "scene",
+                        List.of(),
+                        new StopCondition(StopCondition.Kind.TIME, 1_000, 0),
+                        1,
+                        Preset.defaults(),
+                        Pose.lookingDown(0.5, 200, 0.5),
+                        7L,
+                        List.of(Phase.RESIDENT_RENDER),
+                        false,
+                        List.of(new ScenePlacement("scenes/pen.schem", 0, 64, 0)));
+
+        run(withScene);
+
+        assertEquals(1, port.placed.size());
+        assertTrue(port.calls.indexOf("placeContent") < port.calls.indexOf("position"));
+        assertTrue(port.calls.indexOf("placeContent") < port.calls.indexOf("capture"));
+    }
+
+    /** The barrier is apparatus, so what it waited on travels with the result. */
+    @Test
+    void recordsWhatTheBarrierWaitedOn() {
+        ScenarioResult only = run(scenario("resident", 1)).scenarios().get(0);
+
+        assertEquals(5, only.barrier().stablePolls());
+        assertEquals("all sections built", only.barrier().slowest().name());
     }
 
     @Test
@@ -192,24 +331,26 @@ class HarnessRunTest {
         assertTrue(result.flags().get(0).contains("save is locked"), result.flags().toString());
     }
 
-    /** Better a legible refusal than a number answering a question nobody asked. */
+    /** The stop condition reaches the port whole, since two kinds end on the game progressing. */
     @Test
-    void refusesAStopConditionItCannotYetMeasure() {
+    void handsTheWholeStopConditionToThePort() {
         ScenarioSpec chunks =
                 new ScenarioSpec(
                         "load-chunks",
                         List.of(),
-                        new StopCondition.UntilComplete("chunks", 60_000),
-                        1,
+                        new StopCondition(StopCondition.Kind.CHUNKS, 512, 60_000),
+                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
-                        1L);
+                         1L,
+                        List.of(Phase.UNGENERATED_TRAVERSAL),
+                        false,
+                        List.of());
 
-        ScenarioResult only = run(chunks).scenarios().get(0);
+        run(chunks);
 
-        assertEquals(ScenarioResult.Outcome.FAILED, only.outcome());
-        assertTrue(only.failureReason().contains("completion target"), only.failureReason());
-        assertFalse(port.calls.contains("capture"), "it must not measure something else instead");
+        assertEquals(StopCondition.Kind.CHUNKS, port.lastStop.kind());
+        assertEquals(512, port.lastStop.target());
     }
 
     @Test
@@ -219,11 +360,14 @@ class HarnessRunTest {
                 new ScenarioSpec(
                         "second",
                         List.of("first"),
-                        new StopCondition.FixedDuration(1_000),
+                        new StopCondition(StopCondition.Kind.TIME, 1_000, 0),
                         1,
                         Preset.defaults(),
                         Pose.lookingDown(0.5, 100, 0.5),
-                        1L);
+                        1L,
+                        List.of(Phase.RESIDENT_RENDER),
+                        false,
+                        List.of());
 
         RunResult result =
                 new HarnessRun(RunPlan.of("run-1", "/out", List.of(second, first)), port, frames::add)

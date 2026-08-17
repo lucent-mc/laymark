@@ -13,6 +13,13 @@ public enum Phase {
     /**
      * World creation through to the join barrier. A phase in its own right rather than
      * overhead, because mods target spawn-chunk generation specifically.
+     *
+     * <p><strong>Its frame channel sits under a vanilla cap.</strong> While no level is loaded and
+     * a screen is up — which is precisely world creation — the framerate limiter reports
+     * {@code OUT_OF_LEVEL_MENU} and holds 60 fps. Every capture of this phase is therefore flagged
+     * as throttled, correctly. The signal here is the <em>duration</em> and the work counters:
+     * measured on a real run, 393 server chunks and 163 rendered sections came into existence
+     * during a 1.8s window that no other phase can see.
      */
     SPAWN_GENERATION,
 

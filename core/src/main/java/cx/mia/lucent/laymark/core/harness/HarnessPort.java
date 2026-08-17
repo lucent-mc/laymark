@@ -1,6 +1,9 @@
 package cx.mia.lucent.laymark.core.harness;
 
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
+import cx.mia.lucent.laymark.core.plan.StopCondition;
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Everything the run sequence needs the game to do, expressed as semantic operations.
@@ -46,24 +49,65 @@ public interface HarnessPort {
     /**
      * Blocks until the world is genuinely ready to measure.
      *
+     * @return what the barrier waited on and for how long, so two arms can be compared on the
+     *     state they started from rather than assumed to have matched
      * @throws HarnessException if the barrier does not pass within the timeout. Timing out fails
      *     the run rather than proceeding: measuring an unbuilt world produces plausible numbers,
      *     and the runs that time out are the slow ones, so the error would correlate with the
      *     thing being compared.
      */
-    void awaitReady(Duration timeout);
+    BarrierReport awaitReady(Duration timeout);
 
     /** Places the player and suppresses input. */
     void position(Pose pose);
 
     /**
+     * Whether the region around the pose has never been generated.
+     *
+     * <p>The negative precondition for {@link cx.mia.lucent.laymark.core.Phase#UNGENERATED_TRAVERSAL}.
+     * Measuring generation destroys the thing being measured, so a repetition that finds its
+     * target already generated has to fail rather than proceed — it would complete normally and
+     * report flatteringly good numbers.
+     */
+    boolean targetIsUngenerated(Pose pose);
+
+    /**
+     * Whether the client currently holds no built sections for the region around the pose.
+     *
+     * <p>The negative precondition for {@link cx.mia.lucent.laymark.core.Phase#GENERATED_STREAMING}.
+     * Deliberately not a claim about disk: after generation the region files sit in the OS page
+     * cache and a mod cannot portably evict them. This is about the client's meshes.
+     */
+    boolean targetHasNoBuiltSections(Pose pose);
+
+    /** Places scene geometry. Runs before any barrier, since it changes what there is to build. */
+    void placeContent(List<ScenePlacement> content);
+
+    /**
      * Records every channel for the given duration and returns the raw series.
      *
      * <p>All channels, always. Deciding per scenario which ones to open would save nothing worth
-     * having — they are field reads on hot paths that already exist — and would guarantee that the
-     * one run nobody thought to instrument is the one that turns out to matter.
+     * having -- they are field reads on hot paths that already exist -- and would guarantee that
+     * the one run nobody thought to instrument is the one that turns out to matter.
+     *
+     * <p>Takes the whole stop condition rather than a duration because two of the three kinds end
+     * on the game making progress, which only the implementation can observe.
+     *
+     * @throws HarnessException if the target is not reached within the condition's timeout
      */
-    Measurement capture(Duration duration);
+    Measurement capture(StopCondition stop);
+
+    /**
+     * Opens a capture window without deciding when it ends.
+     *
+     * <p>Split out for spawn generation, whose end is not a target anyone configures — it is the
+     * readiness barrier passing. The window has to be open across {@link #createWorld}, so nothing
+     * can be waited on in between.
+     */
+    void beginCapture();
+
+    /** Closes a window opened by {@link #beginCapture}. */
+    Measurement endCapture();
 
     /**
      * Saves and leaves the world, releasing its lock.

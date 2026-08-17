@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.minecraft;
 
+import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.harness.HarnessPort;
@@ -12,13 +13,24 @@ import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.harness.PresetReadback;
 import cx.mia.lucent.laymark.core.harness.WorldSpec;
+import cx.mia.lucent.laymark.core.plan.StopCondition;
+import cx.mia.lucent.laymark.core.harness.BarrierReport;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
 import java.time.Duration;
 import java.util.List;
-import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
@@ -58,6 +70,9 @@ public final class MinecraftHarnessPort implements HarnessPort {
     private final GpuTimer gpuTimer;
     private final SparkChannel spark;
 
+    /** The save this run created, remembered so disk-level questions can be asked about it. */
+    private volatile String currentLevelId;
+
     public MinecraftHarnessPort(ClientChannels channels) {
         this.recorder = channels.frames();
         this.gpuTimer = channels.gpu();
@@ -83,6 +98,8 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 Duration.ofMinutes(10),
                 () -> {
                     Minecraft minecraft = Minecraft.getInstance();
+                    currentLevelId = spec.levelId();
+
                     LevelStorageSource source = minecraft.getLevelSource();
                     if (source.levelExists(spec.levelId())
                             || !source.isNewLevelIdAcceptable(spec.levelId())) {
@@ -115,17 +132,83 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 });
     }
 
+    /**
+     * Polls the composite barrier, timing each condition separately.
+     *
+     * <p>Per condition rather than one predicate because the result has to say <em>which</em> one
+     * gated the run. A stack whose renderer takes twenty seconds to build out and one whose server
+     * takes twenty seconds to report loaded are different problems that a single "ready after 20s"
+     * cannot distinguish — and one of those conditions is answered by a subsystem that
+     * renderer-replacing mods reimplement.
+     */
     @Override
-    public void awaitReady(Duration timeout) {
-        if (!ClientThread.await(
-                "waiting for the world",
-                timeout,
-                POLL_INTERVAL,
-                STABLE_POLLS,
-                Readiness::worldIsMeasurable)) {
-            throw new HarnessException(
-                    "world was not measurable within " + timeout.toSeconds() + "s");
+    public BarrierReport awaitReady(Duration timeout) {
+        List<Readiness.Condition> conditions =
+                ClientThread.call("listing barrier conditions", Readiness::worldConditions);
+        long startedAt = System.nanoTime();
+        long deadline = startedAt + timeout.toNanos();
+
+        Map<String, Long> satisfiedAt = new LinkedHashMap<>();
+        Set<String> everBlocked = new LinkedHashSet<>();
+        int consecutive = 0;
+
+        while (System.nanoTime() < deadline) {
+            List<String> unmet =
+                    ClientThread.call(
+                            "checking the barrier",
+                            () ->
+                                    conditions.stream()
+                                            .filter(c -> !c.satisfied().getAsBoolean())
+                                            .map(Readiness.Condition::name)
+                                            .toList());
+
+            long elapsed = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+            for (Readiness.Condition condition : conditions) {
+                if (unmet.contains(condition.name())) {
+                    everBlocked.add(condition.name());
+                    satisfiedAt.remove(condition.name());
+                } else {
+                    satisfiedAt.putIfAbsent(condition.name(), elapsed);
+                }
+            }
+
+            // Stability, not a single true. These signals flicker: the renderer reports everything
+            // built and then another chunk arrives.
+            consecutive = unmet.isEmpty() ? consecutive + 1 : 0;
+            if (consecutive >= STABLE_POLLS) {
+                return report(conditions, satisfiedAt, everBlocked, startedAt);
+            }
+            ClientThread.sleep(POLL_INTERVAL);
         }
+
+        throw new HarnessException(
+                "world was not measurable within "
+                        + timeout.toSeconds()
+                        + "s; still waiting on "
+                        + conditions.stream()
+                                .map(Readiness.Condition::name)
+                                .filter(name -> !satisfiedAt.containsKey(name))
+                                .toList());
+    }
+
+    private static BarrierReport report(
+            List<Readiness.Condition> conditions,
+            Map<String, Long> satisfiedAt,
+            Set<String> everBlocked,
+            long startedAt) {
+        List<BarrierReport.Condition> recorded =
+                conditions.stream()
+                        .map(
+                                condition ->
+                                        new BarrierReport.Condition(
+                                                condition.name(),
+                                                satisfiedAt.getOrDefault(condition.name(), 0L),
+                                                everBlocked.contains(condition.name())))
+                        .toList();
+        return new BarrierReport(
+                recorded,
+                STABLE_POLLS,
+                Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
     }
 
     @Override
@@ -156,8 +239,163 @@ public final class MinecraftHarnessPort implements HarnessPort {
         awaitReady(Duration.ofMinutes(2));
     }
 
+    /**
+     * Whether the target region has never been generated, judged from the region file on disk.
+     *
+     * <p>Deliberately conservative, and the direction matters. A region file's <em>absence</em>
+     * proves nothing in that 512-block square was ever generated; its presence only proves
+     * something nearby was. So an absent file answers "ungenerated" and a present one answers
+     * "assume generated", which fails the repetition. Erring the other way would let a traversal
+     * measure a cost that had already been paid and report it as a fast run.
+     */
     @Override
-    public Measurement capture(Duration duration) {
+    public boolean targetIsUngenerated(Pose pose) {
+        return ClientThread.call(
+                "checking whether the target was generated",
+                () -> {
+                    MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+                    if (server == null) {
+                        throw new HarnessException("no integrated server");
+                    }
+                    ServerLevel level = server.overworld();
+                    if (level.getChunkSource().hasChunk(pose.chunkX(), pose.chunkZ())) {
+                        // Loaded right now, so certainly generated.
+                        return false;
+                    }
+                    if (currentLevelId == null) {
+                        throw new HarnessException("no world has been created by this run");
+                    }
+                    Path region =
+                            Minecraft.getInstance()
+                                    .getLevelSource()
+                                    .getLevelPath(currentLevelId)
+                                    .resolve("region")
+                                    .resolve(
+                                            "r."
+                                                    + Math.floorDiv(pose.chunkX(), REGION_CHUNKS)
+                                                    + "."
+                                                    + Math.floorDiv(pose.chunkZ(), REGION_CHUNKS)
+                                                    + ".mca");
+                    return !Files.exists(region);
+                });
+    }
+
+    /** A region file covers a 32x32 square of chunks. */
+    private static final int REGION_CHUNKS = 32;
+
+    /**
+     * Whether the client holds no compiled mesh for the target.
+     *
+     * <p>Not a claim about disk. After generation the region files sit in the OS page cache and a
+     * mod cannot portably evict them, so this asks only what the renderer has built.
+     */
+    @Override
+    public boolean targetHasNoBuiltSections(Pose pose) {
+        return ClientThread.call(
+                "checking whether the target is meshed",
+                () -> {
+                    Minecraft minecraft = Minecraft.getInstance();
+                    if (minecraft.level == null) {
+                        return true;
+                    }
+                    BlockPos at =
+                            BlockPos.containing(pose.x(), pose.y(), pose.z());
+                    return !minecraft.levelRenderer.isSectionCompiledAndVisible(at);
+                });
+    }
+
+    /**
+     * Places scene geometry, in declaration order, verifying counts against each file.
+     *
+     * <p>On the server thread rather than the client's: blocks and entities are server state, and
+     * the client learns about them through the same packets it would in play.
+     */
+    @Override
+    public void placeContent(List<ScenePlacement> content) {
+        if (content.isEmpty()) {
+            return;
+        }
+        ClientThread.call(
+                "placing scene geometry",
+                Duration.ofMinutes(5),
+                () -> {
+                    MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+                    if (server == null) {
+                        throw new HarnessException("no integrated server to place a scene in");
+                    }
+                    ServerLevel level = server.overworld();
+                    Path sceneRoot =
+                            Minecraft.getInstance().gameDirectory.toPath().resolve(Laymark.SCENE_DIR);
+
+                    for (ScenePlacement placement : content) {
+                        Path file = sceneRoot.resolve(placement.schematic());
+                        Schematic schematic = SchematicReader.read(
+                                        file, level.registryAccess().lookupOrThrow(Registries.BLOCK));
+                        ScenePlacer.Placed placed =
+                                ScenePlacer.place(level, schematic, placement, file);
+
+                        // A scene that placed most of itself looks exactly like one that placed all
+                        // of itself, and the difference would read as a performance result.
+                        if (placed.blocks() != schematic.cellCount()) {
+                            throw new HarnessException(
+                                    file + " declares " + schematic.cellCount()
+                                            + " blocks but " + placed.blocks() + " were placed");
+                        }
+                        if (placed.entities() != schematic.entities().size()) {
+                            throw new HarnessException(
+                                    file + " declares " + schematic.entities().size()
+                                            + " entities but " + placed.entities()
+                                            + " were spawned");
+                        }
+                    }
+                    return null;
+                });
+    }
+
+    @Override
+    public void beginCapture() {
+        MemorySnapshot memoryBefore = Counters.memory();
+        WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
+        spark.start();
+        ClientThread.run(
+                "starting the capture",
+                () -> {
+                    gpuTimer.start();
+                    recorder.start();
+                });
+        openedAt = new Opened(workBefore, memoryBefore);
+    }
+
+    @Override
+    public Measurement endCapture() {
+        Opened opened = openedAt;
+        if (opened == null) {
+            throw new HarnessException("no capture is open");
+        }
+        openedAt = null;
+
+        List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
+        List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
+        SparkStatistics sparkStatistics = spark.stop();
+        WorkCounters workAfter = ClientThread.call("reading work counters", Counters::work);
+
+        return new Measurement(
+                frames,
+                gpu,
+                sparkStatistics,
+                opened.work(),
+                workAfter,
+                opened.memory(),
+                Counters.memory());
+    }
+
+    /** State of the world when the open window started, so its deltas can be taken. */
+    private record Opened(WorkCounters work, MemorySnapshot memory) {}
+
+    private volatile Opened openedAt;
+
+    @Override
+    public Measurement capture(StopCondition stop) {
         String throttled = ClientThread.call("checking throttle", PresetOptions::activeThrottle);
         if (throttled != null) {
             // Refused up front rather than flagged. A window that starts throttled is capped for
@@ -167,31 +405,54 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     "framerate was already throttled before the capture began: " + throttled);
         }
 
-        WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
-        MemorySnapshot memoryBefore = Counters.memory();
-
-        // Spark's GC totals are cumulative, so the capture-scoped figure is a difference taken
-        // across the window; its tick statistics are rolling and are read at the end.
-        spark.start();
-        ClientThread.run(
-                "starting the capture",
-                () -> {
-                    gpuTimer.start();
-                    recorder.start();
-                });
-
-        ClientThread.sleep(duration);
-
-        List<FrameSample> frames = ClientThread.call("ending the capture", recorder::stop);
-        List<GpuSample> gpu = ClientThread.call("collecting gpu timings", gpuTimer::stop);
-        SparkStatistics sparkStatistics = spark.stop();
-
-        WorkCounters workAfter = ClientThread.call("reading work counters", Counters::work);
-        MemorySnapshot memoryAfter = Counters.memory();
-
-        return new Measurement(
-                frames, gpu, sparkStatistics, workBefore, workAfter, memoryBefore, memoryAfter);
+        beginCapture();
+        awaitStop(stop, openedAt.work());
+        return endCapture();
     }
+
+    /**
+     * Blocks until the capture's target is reached.
+     *
+     * <p>A duration capture just waits. The other two poll, because they end on the game making
+     * progress — which is exactly what a broken stack fails to do, hence the timeout. Reaching the
+     * timeout <strong>fails</strong> the repetition rather than returning what was collected: a
+     * short capture and a completed one are not the same measurement, and silently substituting
+     * one for the other would put the arms on different workloads.
+     */
+    private void awaitStop(StopCondition stop, WorkCounters workBefore) {
+        if (stop.kind() == StopCondition.Kind.TIME) {
+            ClientThread.sleep(stop.duration());
+            return;
+        }
+
+        long deadline = System.nanoTime() + stop.timeout().toNanos();
+        while (System.nanoTime() < deadline) {
+            long progress =
+                    switch (stop.kind()) {
+                        case FRAMES -> recorder.sampleCount();
+                        case CHUNKS ->
+                                ClientThread.call("reading work counters", Counters::work)
+                                                .clientChunks()
+                                        - workBefore.clientChunks();
+                        case TIME -> throw new IllegalStateException("handled above");
+                    };
+            if (progress >= stop.target()) {
+                return;
+            }
+            ClientThread.sleep(PROGRESS_POLL);
+        }
+        throw new HarnessException(
+                "capture did not reach "
+                        + stop.target()
+                        + " "
+                        + stop.kind()
+                        + " within "
+                        + stop.timeout().toSeconds()
+                        + "s");
+    }
+
+    /** How often to ask whether a completion target has been met. */
+    private static final Duration PROGRESS_POLL = Duration.ofMillis(100);
 
     /** Why the GPU channel is empty, or null when it worked. Reported as a run-level flag. */
     public String gpuUnavailableReason() {

@@ -1,5 +1,7 @@
 package cx.mia.lucent.laymark.core.harness;
 
+import cx.mia.lucent.laymark.core.plan.StopCondition;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,9 +49,34 @@ final class RecordingPort implements HarnessPort {
         created.add(spec);
     }
 
+    /** Negative preconditions default to satisfied; a test flips one to prove it is enforced. */
+    boolean targetUngenerated = true;
+    boolean targetUnmeshed = true;
+    final List<ScenePlacement> placed = new ArrayList<>();
+
     @Override
-    public void awaitReady(Duration timeout) {
+    public BarrierReport awaitReady(Duration timeout) {
         record("awaitReady");
+        return new BarrierReport(
+                List.of(new BarrierReport.Condition("all sections built", 120, true)), 5, 200);
+    }
+
+    @Override
+    public boolean targetIsUngenerated(Pose pose) {
+        record("targetIsUngenerated");
+        return targetUngenerated;
+    }
+
+    @Override
+    public boolean targetHasNoBuiltSections(Pose pose) {
+        record("targetHasNoBuiltSections");
+        return targetUnmeshed;
+    }
+
+    @Override
+    public void placeContent(List<ScenePlacement> content) {
+        record("placeContent");
+        placed.addAll(content);
     }
 
     @Override
@@ -70,12 +97,30 @@ final class RecordingPort implements HarnessPort {
                     8.1,
                     2.2,
                     5.6,
-                    10_000,
+                    500,
                     List.of(new SparkStatistics.GcActivity("G1 Young Generation", 4, 21)));
 
+    StopCondition lastStop;
+
     @Override
-    public Measurement capture(Duration duration) {
+    public void beginCapture() {
+        record("beginCapture");
+    }
+
+    @Override
+    public Measurement endCapture() {
+        record("endCapture");
+        return measurement();
+    }
+
+    @Override
+    public Measurement capture(StopCondition stop) {
         record("capture");
+        lastStop = stop;
+        return measurement();
+    }
+
+    private Measurement measurement() {
         List<FrameSample> samples = new ArrayList<>();
         List<GpuSample> gpu = new ArrayList<>();
         for (int i = 0; i < framesPerCapture; i++) {

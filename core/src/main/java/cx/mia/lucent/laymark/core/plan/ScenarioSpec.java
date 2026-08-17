@@ -1,7 +1,9 @@
 package cx.mia.lucent.laymark.core.plan;
 
+import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.harness.Preset;
+import cx.mia.lucent.laymark.core.scenario.ScenePlacement;
 import java.util.List;
 
 /**
@@ -21,6 +23,11 @@ import java.util.List;
  * @param preset the graphics settings to pin before the world loads
  * @param pose where the player is placed and what it looks at
  * @param seed the world seed; identical across arms, or the comparison is between landscapes
+ * @param measure which phases this scenario captures, in order. Nothing is measured implicitly:
+ *     a scenario that did not ask for spawn generation gets no spawn-generation number, even
+ *     though the world still had to be created. Each named phase decides its own preconditions
+ *     and, for two of them, a negative precondition that can fail the repetition.
+ * @param content scene geometry placed before measuring, in declaration order
  */
 public record ScenarioSpec(
         String id,
@@ -29,7 +36,10 @@ public record ScenarioSpec(
         int repetitions,
         Preset preset,
         Pose pose,
-        long seed) {
+        long seed,
+        List<Phase> measure,
+        boolean generateStructures,
+        List<ScenePlacement> content) {
 
     public ScenarioSpec {
         if (id == null || id.isBlank()) {
@@ -48,9 +58,35 @@ public record ScenarioSpec(
         if (pose == null) {
             throw new PlanException("scenario " + id + " needs a pose");
         }
+        if (measure == null || measure.isEmpty()) {
+            throw new PlanException("scenario " + id + " does not say what to measure");
+        }
+        measure = List.copyOf(measure);
+        if (measure.stream().distinct().count() != measure.size()) {
+            // Two segments of the same phase in one world would differ only by what the first did
+            // to the second, which is a different experiment than the config appears to describe.
+            throw new PlanException(
+                    "scenario " + id + " measures the same phase twice: " + measure);
+        }
         dependsOn = dependsOn == null ? List.of() : List.copyOf(dependsOn);
+        content = content == null ? List.of() : List.copyOf(content);
         if (dependsOn.contains(id)) {
             throw new PlanException("scenario " + id + " depends on itself");
+        }
+        if (measure.contains(Phase.RESIDENT_RENDER)
+                && stopCondition.kind() == StopCondition.Kind.CHUNKS) {
+            // Resident render's barrier waits for the world to be fully loaded before the capture
+            // opens, so no chunk ever arrives during it. Left unchecked this burns a launch and
+            // the whole timeout before failing -- verified the hard way at 60s a repetition.
+            throw new PlanException(
+                    "scenario " + id + " measures the resident render path, where the world is"
+                            + " already loaded, so a chunk target can never be reached");
+        }
+        if (measure.contains(Phase.SPAWN_GENERATION) && !dependsOn.isEmpty()) {
+            // Spawn generation measures world creation itself, so it cannot begin in a world some
+            // earlier scenario already created. The config is asking for two incompatible things.
+            throw new PlanException(
+                    "scenario " + id + " measures spawn generation, so it cannot reuse a world");
         }
     }
 
@@ -62,7 +98,17 @@ public record ScenarioSpec(
      */
     public ScenarioSpec(
             String id, List<String> dependsOn, StopCondition stopCondition, int repetitions) {
-        this(id, dependsOn, stopCondition, repetitions, Preset.defaults(), DEFAULT_POSE, 0L);
+        this(
+                id,
+                dependsOn,
+                stopCondition,
+                repetitions,
+                Preset.defaults(),
+                DEFAULT_POSE,
+                0L,
+                List.of(Phase.RESIDENT_RENDER),
+                false,
+                List.of());
     }
 
     /** High enough to be clear of terrain at any elevation vanilla generates. */

@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cx.mia.lucent.laymark.core.Laymark;
+import cx.mia.lucent.laymark.core.Phase;
+import cx.mia.lucent.laymark.core.harness.BarrierReport;
 import cx.mia.lucent.laymark.core.harness.FrameSample;
 import cx.mia.lucent.laymark.core.harness.GpuSample;
 import cx.mia.lucent.laymark.core.harness.Measurement;
@@ -26,6 +28,48 @@ import org.junit.jupiter.api.Test;
  */
 class ResultCodecTest {
 
+    /** A scenario that asked for two phases gets two segments, each with its own channels. */
+    private static PhaseResult spawnSegment() {
+        return new PhaseResult(
+                Phase.SPAWN_GENERATION,
+                new Measurement(
+                        List.of(FrameSample.interval(0, 40_000_000)),
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null),
+                List.of(),
+                3_900);
+    }
+
+    private static PhaseResult residentSegment() {
+        return new PhaseResult(
+                Phase.RESIDENT_RENDER,
+                new Measurement(
+                        List.of(
+                                new FrameSample(0, 8_100_000, 4_000_000, 2_000_000, Throttle.NONE),
+                                new FrameSample(
+                                        8_100_000, 9_400_000, 4_100_000, 2_100_000, Throttle.SHORT_AFK)),
+                        List.of(new GpuSample(0, 3_300_000)),
+                        new SparkStatistics(
+                                20.0,
+                                2.4,
+                                0.9,
+                                8.1,
+                                2.2,
+                                5.6,
+                                10_000,
+                                List.of(new SparkStatistics.GcActivity("G1 Young", 4, 21))),
+                        new WorkCounters(10, 20, 30),
+                        new WorkCounters(18, 41, 55),
+                        new MemorySnapshot(1_024, 4_096),
+                        new MemorySnapshot(2_048, 4_096)),
+                List.of(),
+                5_000);
+    }
+
     private static RunResult sample() {
         return new RunResult(
                 "run-abc",
@@ -36,24 +80,13 @@ class ResultCodecTest {
                                 1,
                                 new PresetReadback(Preset.defaults(), 2560, 1440, false),
                                 List.of(),
-                                new Measurement(
+                                List.of(spawnSegment(), residentSegment()),
+                                new BarrierReport(
                                         List.of(
-                                                new FrameSample(
-                                                        0, 8_100_000, 4_000_000, 2_000_000, Throttle.NONE),
-                                                new FrameSample(
-                                                        8_100_000,
-                                                        9_400_000,
-                                                        4_100_000,
-                                                        2_100_000,
-                                                        Throttle.SHORT_AFK)),
-                                        List.of(new GpuSample(0, 3_300_000)),
-                                        new SparkStatistics(
-                                                20.0, 2.4, 0.9, 8.1, 2.2, 5.6, 10_000,
-                                                List.of(new SparkStatistics.GcActivity("G1 Young", 4, 21))),
-                                        new WorkCounters(10, 20, 30),
-                                        new WorkCounters(18, 41, 55),
-                                        new MemorySnapshot(1_024, 4_096),
-                                        new MemorySnapshot(2_048, 4_096)),
+                                                new BarrierReport.Condition(
+                                                        "all sections built", 120, true)),
+                                        5,
+                                        200),
                                 5_000),
                         ScenarioResult.failed("traversal", 1, "world never became ready")),
                 List.of("machine was not quiet"));
@@ -67,7 +100,8 @@ class ResultCodecTest {
 
     @Test
     void keepsRawSamplesRatherThanOnlyASummary() {
-        Measurement read = ResultCodec.read(ResultCodec.write(sample())).scenarios().get(0).measurement();
+        Measurement read = ResultCodec.read(ResultCodec.write(sample())).scenarios().get(0)
+                        .segment(Phase.RESIDENT_RENDER).measurement();
         assertEquals(2, read.frames().size());
         assertEquals(8_100_000, read.frames().get(0).intervalNanos());
     }
@@ -75,7 +109,8 @@ class ResultCodecTest {
     /** Every channel round-trips, or a result written today is unreadable by a reader tomorrow. */
     @Test
     void carriesEveryChannelThroughTheDocument() {
-        Measurement read = ResultCodec.read(ResultCodec.write(sample())).scenarios().get(0).measurement();
+        Measurement read = ResultCodec.read(ResultCodec.write(sample())).scenarios().get(0)
+                        .segment(Phase.RESIDENT_RENDER).measurement();
 
         assertEquals(4_000_000, read.frames().get(0).renderCallNanos());
         assertEquals(2_000_000, read.frames().get(0).submitNanos());
@@ -115,7 +150,13 @@ class ResultCodecTest {
                                         1,
                                         new PresetReadback(Preset.defaults(), 800, 600, false),
                                         List.of(),
-                                        withoutSpark,
+                                        List.of(
+                                                new PhaseResult(
+                                                        Phase.RESIDENT_RENDER,
+                                                        withoutSpark,
+                                                        List.of(),
+                                                        1)),
+                                        BarrierReport.none(),
                                         1)),
                         List.of("server statistics unavailable: spark is not installed"));
 
@@ -127,7 +168,8 @@ class ResultCodecTest {
     /** Channels nest, so a report can only be read if the reader knows which is which. */
     @Test
     void summarisesEachTimingChannelSeparately() {
-        Measurement measurement = sample().scenarios().get(0).measurement();
+        Measurement measurement =
+                sample().scenarios().get(0).segment(Phase.RESIDENT_RENDER).measurement();
 
         double interval = measurement.frameStatistics(TimingChannel.INTERVAL).meanMillis();
         double renderCall = measurement.frameStatistics(TimingChannel.RENDER_CALL).meanMillis();
@@ -177,14 +219,22 @@ class ResultCodecTest {
                                                 1,
                                                 new PresetReadback(Preset.defaults(), 800, 600, false),
                                                 List.of(),
-                                                new Measurement(
-                                                        List.of(FrameSample.interval(0, 1)),
-                                                        List.of(),
-                                                        null,
-                                                        null,
-                                                        null,
-                                                        null,
-                                                        null),
+                                                List.of(
+                                                        new PhaseResult(
+                                                                Phase.RESIDENT_RENDER,
+                                                                new Measurement(
+                                                                        List.of(
+                                                                                FrameSample.interval(
+                                                                                        0, 1)),
+                                                                        List.of(),
+                                                                        null,
+                                                                        null,
+                                                                        null,
+                                                                        null,
+                                                                        null),
+                                                                List.of(),
+                                                                1)),
+                                                BarrierReport.none(),
                                                 1))
                                 ,
                                 List.of())

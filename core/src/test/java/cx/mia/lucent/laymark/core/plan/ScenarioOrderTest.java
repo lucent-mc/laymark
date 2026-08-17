@@ -12,7 +12,7 @@ class ScenarioOrderTest {
 
     private static ScenarioSpec spec(String id, String... dependsOn) {
         return new ScenarioSpec(
-                id, List.of(dependsOn), new StopCondition.FixedDuration(45_000), 1);
+                id, List.of(dependsOn), new StopCondition(StopCondition.Kind.TIME, 45_000, 0), 1);
     }
 
     private static List<String> idsOf(List<ScenarioSpec> specs) {

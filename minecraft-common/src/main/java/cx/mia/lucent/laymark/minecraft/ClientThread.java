@@ -59,7 +59,11 @@ public final class ClientThread {
             if (cause instanceof HarnessException harness) {
                 throw harness;
             }
-            throw new HarnessException(what + " failed on the client thread", cause);
+            // The cause goes in the message, not just the chain. This message becomes the detail
+            // on a ScenarioFinished frame and the reason in the result document, and neither
+            // carries a stack trace -- so without it a reader is told only that something failed.
+            throw new HarnessException(
+                    what + " failed on the client thread: " + cause, cause);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new HarnessException(what + " was interrupted", e);
