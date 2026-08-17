@@ -118,7 +118,12 @@ public final class HarnessRun {
             }
         }
         return new RunResult(
-                plan.runId(), Laymark.PROTOCOL_VERSION, revisionOf(order), results, runFlags);
+                plan.runId(),
+                Laymark.PROTOCOL_VERSION,
+                revisionOf(order),
+                List.of(),
+                results,
+                runFlags);
     }
 
     /**

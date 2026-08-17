@@ -30,22 +30,30 @@ public final class MarkdownReport {
                 .append(Duration.ofMillis(report.elapsedMillis()).toMinutes())
                 .append(" minutes\n\n");
 
-        // Voids first. A reader who stops after the stack must already have seen that part of the
-        // run was thrown away.
-        if (!report.voids().isEmpty()) {
+        // Validity first. A reader who stops after the stack must already have seen that part of
+        // the run was thrown away or needs weighing.
+        if (!report.voids().isEmpty() || !report.trustFlags().isEmpty()) {
             out.append("## Validity\n\n");
-            out.append(report.voids().size())
-                    .append(" window(s) were voided and their results excluded.\n\n");
-            for (Drift.VoidWindow window : report.voids()) {
-                out.append("- runs ")
-                        .append(window.fromSequence())
-                        .append("–")
-                        .append(window.toSequence())
-                        .append(": ")
-                        .append(window.reason())
-                        .append('\n');
+            if (!report.voids().isEmpty()) {
+                out.append(report.voids().size())
+                        .append(" window(s) were voided and their results excluded.\n\n");
+                for (Drift.VoidWindow window : report.voids()) {
+                    out.append("- runs ")
+                            .append(window.fromSequence())
+                            .append("–")
+                            .append(window.toSequence())
+                            .append(": ")
+                            .append(window.reason())
+                            .append('\n');
+                }
+                out.append('\n');
             }
-            out.append('\n');
+            for (String flag : report.trustFlags()) {
+                out.append("- ").append(flag).append('\n');
+            }
+            if (!report.trustFlags().isEmpty()) {
+                out.append('\n');
+            }
         }
 
         out.append("## Recommended stack\n\n");

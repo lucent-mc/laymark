@@ -40,6 +40,16 @@ public record Measurement(
         return new Measurement(List.of(), List.of(), null, null, null, null, null);
     }
 
+    /**
+     * This measurement without its raw series, for the on-disk copy once the samples have been
+     * written beside it. The scalar channels — Spark, work counters, memory — are already
+     * summaries and stay.
+     */
+    public Measurement withoutSamples() {
+        return new Measurement(
+                List.of(), List.of(), spark, workBefore, workAfter, memoryBefore, memoryAfter);
+    }
+
     /** The scored distribution. */
     public FrameStatistics frameStatistics() {
         return FrameStatistics.of(frames, TimingChannel.INTERVAL);

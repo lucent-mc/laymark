@@ -14,10 +14,13 @@ import java.util.List;
  *     position is part of a scenario's identity, so results from different revisions must never
  *     be pooled — and this is what makes that refusable later.
  */
+ /* @param loadedMods the loader's own account of what loaded, by mod id — the only in-process
+  *     evidence that materialisation produced the arm that was asked for */
 public record RunResult(
         String runId,
         int protocolVersion,
         String scenarioListRevision,
+        List<String> loadedMods,
         List<ScenarioResult> scenarios,
         List<String> flags) {
 
@@ -34,6 +37,7 @@ public record RunResult(
                 scenarioListRevision == null || scenarioListRevision.isBlank()
                         ? "unrecorded"
                         : scenarioListRevision;
+        loadedMods = loadedMods == null ? List.of() : List.copyOf(loadedMods);
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
         flags = flags == null ? List.of() : List.copyOf(flags);
     }

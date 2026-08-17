@@ -61,6 +61,16 @@ final class ClientHooks {
             return;
         }
         started = true;
-        Harness.start(channels, LaymarkNeoForge::report);
+        // The inventory is FML's own account of what loaded -- the only in-process check that
+        // materialisation actually produced the arm. Supplied by the loader module because only
+        // it may import FML; recorded on the result and verified by the runner.
+        Harness.start(
+                channels,
+                LaymarkNeoForge::report,
+                () ->
+                        net.neoforged.fml.ModList.get().getMods().stream()
+                                .map(mod -> mod.getModId())
+                                .sorted()
+                                .toList());
     }
 }

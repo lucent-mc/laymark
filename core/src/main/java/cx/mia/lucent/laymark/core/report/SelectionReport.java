@@ -25,6 +25,9 @@ import java.util.Map;
  *     than silently producing a number
  * @param branches conflict branches explored, each with its own stack
  */
+ /* @param trustFlags every contamination annotation any arm produced, prefixed with the arm that
+  *     produced it. In the durable artifact rather than only on stdout, because a trust
+  *     annotation nobody can find later protects nobody. */
 public record SelectionReport(
         String runId,
         String hardware,
@@ -35,6 +38,7 @@ public record SelectionReport(
         List<Comparison> comparisons,
         List<Drift.VoidWindow> voids,
         List<Branch> branches,
+        List<String> trustFlags,
         Map<String, String> provenance) {
 
     /** One round's ranking, and why each entry moved. */
@@ -64,6 +68,7 @@ public record SelectionReport(
         comparisons = List.copyOf(comparisons);
         voids = List.copyOf(voids);
         branches = List.copyOf(branches);
+        trustFlags = trustFlags == null ? List.of() : List.copyOf(trustFlags);
         provenance = Map.copyOf(provenance);
     }
 
