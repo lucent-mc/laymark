@@ -41,21 +41,13 @@ public record PresetReadback(
          */
     public List<String> deviationsFrom(Preset requested) {
         List<String> deviations = new ArrayList<>();
-        compare(deviations, "renderDistance", requested.renderDistance(), effective.renderDistance());
-        compare(deviations, "simulationDistance", requested.simulationDistance(),
-                effective.simulationDistance());
-        compare(deviations, "particles", requested.particles(), effective.particles());
-        compare(deviations, "clouds", requested.clouds(), effective.clouds());
-        compare(deviations, "entityShadows", requested.entityShadows(), effective.entityShadows());
-        compare(deviations, "biomeBlendRadius", requested.biomeBlendRadius(),
-                effective.biomeBlendRadius());
-        compare(deviations, "fieldOfView", requested.fieldOfView(), effective.fieldOfView());
-        // Free-form options: every requested key is compared against what the game reports for
-        // it. Keys with no effective accessor are echoed back as asked and compare clean, exactly
-        // like vsync.
-        for (var namespace : requested.options().entrySet()) {
+        // Every requested key is compared against what the game reports for it. Keys with no
+        // effective accessor are echoed back as asked and compare clean — unverifiable is not the
+        // same as deviated. The effective preset may carry keys nobody requested (the cross-arm
+        // parity gate reads a few unconditionally); those are not deviations from this request.
+        for (var namespace : requested.values().entrySet()) {
             var effectiveValues =
-                    effective.options().getOrDefault(namespace.getKey(), java.util.Map.of());
+                    effective.values().getOrDefault(namespace.getKey(), java.util.Map.of());
             for (var entry : namespace.getValue().entrySet()) {
                 compare(
                         deviations,

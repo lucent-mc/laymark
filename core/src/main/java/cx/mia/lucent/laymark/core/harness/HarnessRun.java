@@ -318,7 +318,7 @@ public final class HarnessRun {
 
         port.beginCapture();
         port.teleport(scenario.pose());
-        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         return port.endCapture();
     }
 
@@ -362,7 +362,7 @@ public final class HarnessRun {
         events.accept(new Frame.PhaseEntered(scenario.id(), Phase.GENERATED_STREAMING, phaseStartedAt));
         port.beginCapture();
         port.teleport(scenario.pose());
-        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         return port.endCapture();
     }
 
@@ -383,8 +383,19 @@ public final class HarnessRun {
     private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
         port.position(scenario.pose());
         events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
-        return port.capture(
-                scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        return port.capture(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
+    }
+
+    /**
+     * The view distance handed to the port for chunk counting.
+     *
+     * <p>Zero when the preset does not pin one, which the plan validation only permits for stop
+     * conditions that never count chunks — the port ignores the value on those paths. Chunky's
+     * pre-generation footprint goes through the strict accessor instead, because there the radius
+     * is the work.
+     */
+    private static int viewDistance(ScenarioSpec scenario) {
+        return scenario.preset().pinnedViewDistance().orElse(0);
     }
 
     /**

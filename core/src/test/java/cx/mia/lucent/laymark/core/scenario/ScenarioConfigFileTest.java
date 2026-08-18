@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.harness.Pose;
-import cx.mia.lucent.laymark.core.harness.Preset;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -30,7 +29,11 @@ class ScenarioConfigFileTest {
         // parses. Pinning intro sentences here made editing the intro break the build.
         assertTrue(contents.startsWith("//"), "the reference opens with its commentary");
         assertTrue(contents.length() > 5_000, "the complete reference, not an empty config stub");
-        assertEquals(2, ConfigCodec.read(contents).scenarios().size());
+        ScenarioConfig config = ConfigCodec.read(contents);
+        assertEquals(2, config.scenarios().size());
+        // Not just parseable: the shipped default must survive plan validation, or the first
+        // thing a new instance does is refuse its own config.
+        assertEquals(2, config.resolve("test", "out").scenarios().size());
     }
 
     @Test
@@ -54,7 +57,6 @@ class ScenarioConfigFileTest {
                     ScenarioConfig.class,
                     ScenarioDefinition.class,
                     StopSpec.class,
-                    Preset.class,
                     Pose.class,
                     ScenePlacement.class
                 }) {
@@ -72,11 +74,19 @@ class ScenarioConfigFileTest {
 
         assertEnumValuesDocumented(contents, Phase.values());
         assertEnumValuesDocumented(contents, StopCondition.Kind.values());
-        assertEnumValuesDocumented(contents, Preset.ParticleDetail.values());
-        assertEnumValuesDocumented(contents, Preset.CloudDetail.values());
         assertTrue(contents.contains("\"all-in-radius\""));
-        assertTrue(contents.contains("\"settings\": \"example\""), "named settings form");
-        assertTrue(contents.contains("// \"settings\": {"), "inline settings form");
+        assertTrue(contents.contains("\"settings\": \"chunks\""), "named settings form");
+        // The humane spellings over the raw registry keys, and the settings shape itself.
+        for (String documented :
+                new String[] {
+                    "\"minecraft\"",
+                    "\"renderDistance\"",
+                    "\"fieldOfView\"",
+                    "\"particles\"",
+                    "\"clouds\""
+                }) {
+            assertTrue(contents.contains(documented), documented + " is absent from the reference");
+        }
     }
 
     private static void assertEnumValuesDocumented(String contents, Enum<?>[] values) {

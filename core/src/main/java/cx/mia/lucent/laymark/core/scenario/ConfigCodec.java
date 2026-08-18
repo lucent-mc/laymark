@@ -41,10 +41,6 @@ public final class ConfigCodec {
                             new com.google.gson.reflect.TypeToken<List<Phase>>() {}.getType(),
                             new OneOrMany<>(Phase.class))
                     .registerTypeAdapter(Phase.class, StrictEnum.of(Phase.class))
-                    .registerTypeAdapter(
-                            Preset.ParticleDetail.class, StrictEnum.of(Preset.ParticleDetail.class))
-                    .registerTypeAdapter(
-                            Preset.CloudDetail.class, StrictEnum.of(Preset.CloudDetail.class))
                     .registerTypeAdapter(Preset.class, new PresetAdapter())
                     .registerTypeAdapter(PresetRef.class, new PresetRefAdapter())
                     .create();
@@ -54,12 +50,14 @@ public final class ConfigCodec {
     }
 
     /**
-     * Reads a config, comments included.
+     * Reads a config, comments and trailing commas included.
      *
-     * <p>{@code //} and <code>/* *&#47;</code> comments are accepted — the config is hand-authored
-     * and a schema someone can annotate in place is a schema they can actually learn. The archived
-     * plan is still written as strict JSON; leniency is for what humans write, not what Laymark
-     * records.
+     * <p>{@code //} and <code>/* *&#47;</code> comments and trailing commas are accepted — the
+     * config is hand-authored, a schema someone can annotate in place is a schema they can
+     * actually learn, and a trailing comma is how an editable list stays editable. Gson's lenient
+     * mode covers the comments but not the commas, so both are stripped by a string-aware pass
+     * first (newlines preserved, so parse errors still name the right line). The archived plan is
+     * still written as strict JSON; leniency is for what humans write, not what Laymark records.
      *
      * @throws PlanException if the document is malformed or describes an invalid config
      */
@@ -68,7 +66,8 @@ public final class ConfigCodec {
             throw new PlanException("scenario config is empty");
         }
         try {
-            var reader = new com.google.gson.stream.JsonReader(new java.io.StringReader(json));
+            var reader =
+                    new com.google.gson.stream.JsonReader(new java.io.StringReader(strip(json)));
             reader.setStrictness(com.google.gson.Strictness.LENIENT);
             ScenarioConfig config = GSON.fromJson(reader, ScenarioConfig.class);
             if (config == null) {
@@ -80,6 +79,88 @@ public final class ConfigCodec {
         } catch (RuntimeException e) {
             throw unwrap(e, "scenario config could not be read");
         }
+    }
+
+    /**
+     * Strips comments and trailing commas, leaving strings untouched and newlines in place.
+     *
+     * <p>Not a general JSONC parser — just the two shapes hand-written configs contain that Gson
+     * refuses. A {@code //} inside a quoted string (a Windows path, a URL) survives, because the
+     * scan tracks string state rather than pattern-matching.
+     */
+    private static String strip(String text) {
+        StringBuilder noComments = new StringBuilder(text.length());
+        boolean inString = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (inString) {
+                noComments.append(c);
+                if (c == '\\' && i + 1 < text.length()) {
+                    noComments.append(text.charAt(++i));
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                noComments.append(c);
+                continue;
+            }
+            if (c == '/' && i + 1 < text.length() && text.charAt(i + 1) == '/') {
+                while (i < text.length() && text.charAt(i) != '\n') {
+                    i++;
+                }
+                noComments.append('\n');
+                continue;
+            }
+            if (c == '/' && i + 1 < text.length() && text.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < text.length()
+                        && !(text.charAt(i) == '*' && text.charAt(i + 1) == '/')) {
+                    if (text.charAt(i) == '\n') {
+                        noComments.append('\n');
+                    }
+                    i++;
+                }
+                i++;
+                continue;
+            }
+            noComments.append(c);
+        }
+
+        StringBuilder result = new StringBuilder(noComments.length());
+        inString = false;
+        for (int i = 0; i < noComments.length(); i++) {
+            char c = noComments.charAt(i);
+            if (inString) {
+                result.append(c);
+                if (c == '\\' && i + 1 < noComments.length()) {
+                    result.append(noComments.charAt(++i));
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                result.append(c);
+                continue;
+            }
+            if (c == ',') {
+                int next = i + 1;
+                while (next < noComments.length()
+                        && Character.isWhitespace(noComments.charAt(next))) {
+                    next++;
+                }
+                if (next < noComments.length()
+                        && (noComments.charAt(next) == '}' || noComments.charAt(next) == ']')) {
+                    continue; // a trailing comma; the closer follows directly
+                }
+            }
+            result.append(c);
+        }
+        return result.toString();
     }
 
     /**

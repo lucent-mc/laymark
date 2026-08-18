@@ -87,7 +87,14 @@ final class GenericOptions {
         return registry;
     }
 
-    /** Sets one option from the literal the operator wrote, through the option's codec. */
+    /**
+     * Sets one option from the literal the operator wrote, through the option's codec.
+     *
+     * <p>Set and immediately confirmed: the codec accepting a value does not mean the option did.
+     * {@code OptionInstance#set} replaces a value outside the option's own range with its
+     * <em>default</em> — a log line, not an error — so without the re-read a render distance the
+     * heap cannot hold would silently run at 12 while both arms report 32.
+     */
     @SuppressWarnings("unchecked")
     static void set(Options options, String key, String literal) {
         OptionInstance<Object> option = (OptionInstance<Object>) lookup(options, key);
@@ -100,6 +107,12 @@ final class GenericOptions {
                                                 "option '" + key + "' rejected value '" + literal
                                                         + "': " + message));
         option.set(value);
+        Object stored = option.get();
+        if (!value.equals(stored)) {
+            throw new HarnessException(
+                    "the game refused " + key + " = " + literal + " and substituted " + stored
+                            + "; vanilla replaces an unacceptable value with the option default");
+        }
     }
 
     /** The option's current value, serialised back through its codec to the same literal form. */

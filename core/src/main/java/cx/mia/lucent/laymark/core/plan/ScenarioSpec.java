@@ -88,6 +88,18 @@ public record ScenarioSpec(
             throw new PlanException(
                     "scenario " + id + " measures spawn generation, so it cannot reuse a world");
         }
+        boolean derivesChunkRadius =
+                stopCondition.kind() == StopCondition.Kind.CHUNKS
+                        || (measure.contains(Phase.GENERATED_STREAMING) && dependsOn.isEmpty());
+        if (derivesChunkRadius && preset.pinnedViewDistance().isEmpty()) {
+            // A chunk stop counts arrivals within the send radius, and Chunky's pre-generation
+            // footprint covers it. Unpinned, that radius would be whatever the instance happens
+            // to have -- two machines quietly doing different amounts of work under one config.
+            throw new PlanException(
+                    "scenario " + id + " judges completion by chunks around the player, so its"
+                            + " settings must pin minecraft.renderDistance — the chunk target and"
+                            + " the send radius are derived from it");
+        }
     }
 
     /**
@@ -103,7 +115,7 @@ public record ScenarioSpec(
                 dependsOn,
                 stopCondition,
                 repetitions,
-                Preset.defaults(),
+                Preset.empty(),
                 DEFAULT_POSE,
                 0L,
                 List.of(Phase.RESIDENT_RENDER),

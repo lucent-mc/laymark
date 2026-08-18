@@ -59,7 +59,7 @@ public record ScenarioDefinition(
      * @param presets resolves a preset name; called only when the scenario named one
      */
     public ScenarioSpec resolve(Function<String, Preset> presets) {
-        Preset effective = settings == null ? Preset.defaults() : settings.resolve(presets);
+        Preset effective = settings == null ? Preset.empty() : settings.resolve(presets);
 
         return new ScenarioSpec(
                 id,
