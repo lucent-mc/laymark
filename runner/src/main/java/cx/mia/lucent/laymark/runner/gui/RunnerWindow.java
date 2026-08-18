@@ -70,19 +70,27 @@ public final class RunnerWindow implements ExperimentListener {
     private final JFrame frame = new JFrame("Laymark");
     private final PlanningView planning = new PlanningView();
 
-    // Responsive shell: wide windows show the roster as a split-pane sidebar; below the
-    // threshold it collapses into a drawer that slides over the results on demand.
+    // Responsive shell: wide windows show the roster as a split-pane sidebar and tall windows
+    // keep the log under a draggable divider; below the thresholds each collapses into a drawer
+    // that slides over the results on demand.
     private static final int COLLAPSE_THRESHOLD = 900;
+    private static final int LOG_COLLAPSE_THRESHOLD = 760;
     private static final int DRAWER_WIDTH = 400;
+    private static final int LOG_DRAWER_HEIGHT = 300;
     private javax.swing.JSplitPane body;
+    private javax.swing.JSplitPane resultsSplit;
     private JPanel run;
+    private JPanel logPanel;
     private final JPanel centerHost = new JPanel(new BorderLayout());
-    private final JPanel drawer = new JPanel(new BorderLayout());
     private JPanel scrim;
     private final JButton hamburger = Theme.button("☰", false);
+    private final JButton logButton = Theme.button("Log", false);
+    private SlideDrawer rosterDrawer;
+    private SlideDrawer logDrawer;
     private boolean railCollapsed;
-    private boolean drawerShown;
-    private Timer drawerAnimator;
+    private boolean logCollapsed;
+    private int logHeight = 240;
+    private boolean anchoringLog;
 
     private final JButton startButton = Theme.button("Start", true);
     private final JButton stopButton = Theme.button("Stop", false);
@@ -166,8 +174,8 @@ public final class RunnerWindow implements ExperimentListener {
         // Extra width goes to the results side; the roster keeps whatever the operator dragged.
         body.setResizeWeight(0);
 
-        drawer.setBackground(Theme.BACKGROUND);
-        drawer.setBorder(javax.swing.BorderFactory.createMatteBorder(0, 0, 0, 1, Theme.LINE));
+        rosterDrawer = new SlideDrawer(true);
+        logDrawer = new SlideDrawer(false);
         scrim =
                 new JPanel() {
                     @Override
@@ -181,7 +189,8 @@ public final class RunnerWindow implements ExperimentListener {
                 new java.awt.event.MouseAdapter() {
                     @Override
                     public void mousePressed(java.awt.event.MouseEvent unused) {
-                        closeDrawer(true);
+                        rosterDrawer.close(true);
+                        logDrawer.close(true);
                     }
                 });
 
@@ -194,8 +203,8 @@ public final class RunnerWindow implements ExperimentListener {
         frame.add(centerHost, BorderLayout.CENTER);
         frame.setSize(1500, 900);
         // Small enough to live in whatever strip the game leaves free; below the collapse
-        // threshold the roster is a drawer, so the results keep the full width.
-        frame.setMinimumSize(new Dimension(560, 620));
+        // thresholds the roster and the log are drawers, so the results keep the full window.
+        frame.setMinimumSize(new Dimension(560, 480));
         frame.setLocationByPlatform(true);
         frame.addComponentListener(
                 new java.awt.event.ComponentAdapter() {
@@ -242,16 +251,13 @@ public final class RunnerWindow implements ExperimentListener {
 
         hamburger.setToolTipText("Mod roster");
         hamburger.setVisible(false);
-        hamburger.addActionListener(
-                unused -> {
-                    if (drawerShown) {
-                        closeDrawer(true);
-                    } else {
-                        openDrawer();
-                    }
-                });
+        hamburger.addActionListener(unused -> rosterDrawer.toggle());
+        logButton.setToolTipText("Log");
+        logButton.setVisible(false);
+        logButton.addActionListener(unused -> logDrawer.toggle());
 
         bar.add(hamburger);
+        bar.add(logButton);
         bar.add(startButton);
         bar.add(stopButton);
         bar.add(Theme.separator());
@@ -267,114 +273,176 @@ public final class RunnerWindow implements ExperimentListener {
     // --- responsive shell ---
 
     /**
-     * Moves the roster between its two homes as the window crosses the threshold.
+     * Moves the roster and the log between their two homes as the window crosses the thresholds.
      *
-     * <p>Wide: a split-pane sidebar, always visible, divider draggable. Narrow: the roster leaves
-     * the layout entirely — the results take the full width — and comes back as a drawer sliding
-     * over them from the hamburger. The same {@link PlanningView} instance moves between parents,
-     * so toggles, search state and per-arm status survive the crossing.
+     * <p>Wide: the roster is a split-pane sidebar, always visible, divider draggable. Narrow: it
+     * leaves the layout — the results take the full width — and comes back as a drawer sliding in
+     * from the hamburger. Tall and short do the same for the log along the other axis. The same
+     * component instances move between parents, so toggles, search state, per-arm status and the
+     * log text survive every crossing.
      */
     private void updateResponsiveLayout() {
         boolean narrow = frame.getWidth() < COLLAPSE_THRESHOLD;
-        if (narrow == railCollapsed) {
-            if (drawerShown) {
-                layoutOverlay();
+        if (narrow != railCollapsed) {
+            railCollapsed = narrow;
+            hamburger.setVisible(narrow);
+            if (narrow) {
+                centerHost.remove(body);
+                rosterDrawer.panel.add(planning, BorderLayout.CENTER);
+                centerHost.add(run, BorderLayout.CENTER);
+            } else {
+                rosterDrawer.close(false);
+                rosterDrawer.panel.remove(planning);
+                centerHost.remove(run);
+                body.setLeftComponent(planning);
+                body.setRightComponent(run);
+                centerHost.add(body, BorderLayout.CENTER);
+                body.setDividerLocation(Math.min(430, frame.getWidth() / 2));
             }
-            return;
+            centerHost.revalidate();
+            centerHost.repaint();
         }
-        railCollapsed = narrow;
-        hamburger.setVisible(narrow);
-        if (narrow) {
-            centerHost.remove(body);
-            drawer.add(planning, BorderLayout.CENTER);
-            centerHost.add(run, BorderLayout.CENTER);
-        } else {
-            closeDrawer(false);
-            drawer.remove(planning);
-            centerHost.remove(run);
-            body.setLeftComponent(planning);
-            body.setRightComponent(run);
-            centerHost.add(body, BorderLayout.CENTER);
-            body.setDividerLocation(Math.min(430, frame.getWidth() / 2));
-        }
-        centerHost.revalidate();
-        centerHost.repaint();
-    }
 
-    private void openDrawer() {
-        if (drawerShown) {
-            return;
-        }
-        drawerShown = true;
-        var layers = frame.getRootPane().getLayeredPane();
-        layoutOverlay();
-        drawer.setLocation(-drawer.getWidth(), drawer.getY());
-        layers.add(scrim, javax.swing.JLayeredPane.MODAL_LAYER);
-        layers.add(drawer, javax.swing.JLayeredPane.POPUP_LAYER);
-        layers.revalidate();
-        layers.repaint();
-        slideDrawerTo(0, null);
-    }
-
-    private void closeDrawer(boolean animated) {
-        if (!drawerShown) {
-            return;
-        }
-        drawerShown = false;
-        Runnable detach =
-                () -> {
-                    var layers = frame.getRootPane().getLayeredPane();
-                    layers.remove(scrim);
-                    layers.remove(drawer);
-                    layers.revalidate();
-                    layers.repaint();
-                };
-        if (animated) {
-            slideDrawerTo(-drawer.getWidth(), detach);
-        } else {
-            if (drawerAnimator != null) {
-                drawerAnimator.stop();
+        boolean shallow = frame.getHeight() < LOG_COLLAPSE_THRESHOLD;
+        if (shallow != logCollapsed) {
+            logCollapsed = shallow;
+            logButton.setVisible(shallow);
+            if (shallow) {
+                resultsSplit.setBottomComponent(null);
+                logDrawer.panel.add(logPanel, BorderLayout.CENTER);
+            } else {
+                logDrawer.close(false);
+                logDrawer.panel.remove(logPanel);
+                resultsSplit.setBottomComponent(logPanel);
+                anchorLog();
             }
-            detach.run();
+            resultsSplit.revalidate();
+            resultsSplit.repaint();
         }
+
+        rosterDrawer.relayout();
+        logDrawer.relayout();
     }
 
-    /** Overlay geometry, recomputed on open and on every resize while the drawer is out. */
-    private void layoutOverlay() {
-        var layers = frame.getRootPane().getLayeredPane();
-        int width = Math.min(DRAWER_WIDTH, Math.max(260, layers.getWidth() - 60));
-        scrim.setBounds(0, 0, layers.getWidth(), layers.getHeight());
-        drawer.setBounds(drawerAnimator != null && drawerAnimator.isRunning() ? drawer.getX() : 0,
-                0, width, layers.getHeight());
-    }
+    /**
+     * A sheet that slides over the results from one edge — the roster from the left, the log from
+     * the bottom. Both share the single scrim, so opening one closes the other.
+     */
+    private final class SlideDrawer {
 
-    /** A short ease-out slide; the scrim just appears, the drawer does the moving. */
-    private void slideDrawerTo(int targetX, Runnable onDone) {
-        if (drawerAnimator != null) {
-            drawerAnimator.stop();
+        final JPanel panel = new JPanel(new BorderLayout());
+        private final boolean fromLeft;
+        private boolean shown;
+        private Timer animator;
+
+        SlideDrawer(boolean fromLeft) {
+            this.fromLeft = fromLeft;
+            panel.setBackground(Theme.BACKGROUND);
+            panel.setBorder(
+                    fromLeft
+                            ? javax.swing.BorderFactory.createMatteBorder(0, 0, 0, 1, Theme.LINE)
+                            : javax.swing.BorderFactory.createMatteBorder(1, 0, 0, 0, Theme.LINE));
         }
-        int fromX = drawer.getX();
-        long startedSliding = System.currentTimeMillis();
-        int duration = 140;
-        drawerAnimator = new Timer(10, null);
-        drawerAnimator.addActionListener(
-                unused -> {
-                    float linear =
-                            Math.min(
-                                    1f,
-                                    (System.currentTimeMillis() - startedSliding)
-                                            / (float) duration);
-                    float eased = 1 - (1 - linear) * (1 - linear);
-                    drawer.setLocation(
-                            Math.round(fromX + (targetX - fromX) * eased), drawer.getY());
-                    if (linear >= 1f) {
-                        drawerAnimator.stop();
-                        if (onDone != null) {
-                            onDone.run();
+
+        void toggle() {
+            if (shown) {
+                close(true);
+            } else {
+                open();
+            }
+        }
+
+        void open() {
+            if (shown) {
+                return;
+            }
+            (this == rosterDrawer ? logDrawer : rosterDrawer).close(false);
+            shown = true;
+            var layers = frame.getRootPane().getLayeredPane();
+            relayout();
+            panel.setLocation(
+                    fromLeft ? -panel.getWidth() : 0, fromLeft ? 0 : layers.getHeight());
+            layers.add(scrim, javax.swing.JLayeredPane.MODAL_LAYER);
+            layers.add(panel, javax.swing.JLayeredPane.POPUP_LAYER);
+            layers.revalidate();
+            layers.repaint();
+            slideTo(fromLeft ? 0 : layers.getHeight() - panel.getHeight(), null);
+        }
+
+        void close(boolean animated) {
+            if (!shown) {
+                return;
+            }
+            shown = false;
+            var layers = frame.getRootPane().getLayeredPane();
+            Runnable detach =
+                    () -> {
+                        layers.remove(scrim);
+                        layers.remove(panel);
+                        layers.revalidate();
+                        layers.repaint();
+                    };
+            if (animated) {
+                slideTo(fromLeft ? -panel.getWidth() : layers.getHeight(), detach);
+            } else {
+                if (animator != null) {
+                    animator.stop();
+                }
+                detach.run();
+            }
+        }
+
+        /** Overlay geometry, recomputed on open and on every resize while the sheet is out. */
+        void relayout() {
+            if (!shown) {
+                return;
+            }
+            var layers = frame.getRootPane().getLayeredPane();
+            scrim.setBounds(0, 0, layers.getWidth(), layers.getHeight());
+            boolean sliding = animator != null && animator.isRunning();
+            if (fromLeft) {
+                int width = Math.min(DRAWER_WIDTH, Math.max(260, layers.getWidth() - 60));
+                panel.setBounds(sliding ? panel.getX() : 0, 0, width, layers.getHeight());
+            } else {
+                int height =
+                        Math.min(LOG_DRAWER_HEIGHT, Math.max(160, layers.getHeight() - 160));
+                panel.setBounds(
+                        0,
+                        sliding ? panel.getY() : layers.getHeight() - height,
+                        layers.getWidth(),
+                        height);
+            }
+        }
+
+        /** A short ease-out slide; the scrim just appears, the sheet does the moving. */
+        private void slideTo(int target, Runnable onDone) {
+            if (animator != null) {
+                animator.stop();
+            }
+            int from = fromLeft ? panel.getX() : panel.getY();
+            long startedSliding = System.currentTimeMillis();
+            int duration = 140;
+            animator = new Timer(10, null);
+            animator.addActionListener(
+                    unused -> {
+                        float linear =
+                                Math.min(
+                                        1f,
+                                        (System.currentTimeMillis() - startedSliding)
+                                                / (float) duration);
+                        float eased = 1 - (1 - linear) * (1 - linear);
+                        int at = Math.round(from + (target - from) * eased);
+                        panel.setLocation(
+                                fromLeft ? at : panel.getX(), fromLeft ? panel.getY() : at);
+                        if (linear >= 1f) {
+                            animator.stop();
+                            if (onDone != null) {
+                                onDone.run();
+                            }
                         }
-                    }
-                });
-        drawerAnimator.start();
+                    });
+            animator.start();
+        }
     }
 
     private JPanel runView() {
@@ -396,15 +464,70 @@ public final class RunnerWindow implements ExperimentListener {
                                 + " a percentage without one is noise wearing a number."),
                 BorderLayout.SOUTH);
 
-        JPanel bottom = new JPanel(new BorderLayout(0, 12));
-        bottom.setOpaque(false);
-        bottom.add(currentRunCard(), BorderLayout.NORTH);
-        bottom.add(logCard(), BorderLayout.CENTER);
-        bottom.setPreferredSize(new Dimension(0, 300));
+        // The current-run card stays fixed above the divider; only the log rides below it, so
+        // the handle sits directly over the log and dragging it never moves the three facts
+        // that say what the numbers mean.
+        JPanel main = new JPanel(new BorderLayout(0, 12));
+        main.setOpaque(false);
+        main.add(grid, BorderLayout.CENTER);
+        main.add(currentRunCard(), BorderLayout.SOUTH);
+        main.setMinimumSize(new Dimension(0, 0));
 
-        view.add(grid, BorderLayout.CENTER);
-        view.add(bottom, BorderLayout.SOUTH);
+        logPanel = logCard();
+        logPanel.setMinimumSize(new Dimension(0, 0));
+        logPanel.setPreferredSize(new Dimension(0, 240));
+
+        resultsSplit =
+                new javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT, main, logPanel);
+        resultsSplit.setBackground(Theme.BACKGROUND);
+        resultsSplit.setBorder(null);
+        resultsSplit.setContinuousLayout(true);
+        resultsSplit.setDividerSize(8);
+
+        // The log is anchored to the bottom by hand, not with resizeWeight: weight-based
+        // redistribution computes deltas from the last laid-out size, and asynchronous
+        // validation can interleave a zero-size pass that wrecks the arithmetic -- observed as
+        // the divider pinning absolutely and the log being eaten 1:1 by a shrinking window.
+        // Explicit is boring and correct: divider drags record the operator's log height, and
+        // every split resize re-asserts it.
+        resultsSplit.addPropertyChangeListener(
+                javax.swing.JSplitPane.DIVIDER_LOCATION_PROPERTY,
+                unused -> {
+                    if (!anchoringLog
+                            && resultsSplit.getHeight() > 0
+                            && resultsSplit.getBottomComponent() == logPanel) {
+                        int dragged =
+                                resultsSplit.getHeight()
+                                        - resultsSplit.getDividerLocation()
+                                        - resultsSplit.getDividerSize();
+                        if (dragged >= 0) {
+                            logHeight = dragged;
+                        }
+                    }
+                });
+        resultsSplit.addComponentListener(
+                new java.awt.event.ComponentAdapter() {
+                    @Override
+                    public void componentResized(java.awt.event.ComponentEvent unused) {
+                        anchorLog();
+                    }
+                });
+
+        view.add(resultsSplit, BorderLayout.CENTER);
         return view;
+    }
+
+    /** Re-asserts the operator's log height after anything moves the split under it. */
+    private void anchorLog() {
+        if (resultsSplit.getBottomComponent() != logPanel || resultsSplit.getHeight() <= 0) {
+            return;
+        }
+        anchoringLog = true;
+        int height = resultsSplit.getHeight();
+        int location = Math.max(120, height - logHeight - resultsSplit.getDividerSize());
+        resultsSplit.setDividerLocation(
+                Math.min(location, height - resultsSplit.getDividerSize()));
+        anchoringLog = false;
     }
 
     /**

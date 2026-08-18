@@ -16,10 +16,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Walks the window width across the collapse threshold, both directions, and holds the shell to
- * its invariant at every width: split mode has the roster and results laid out inside the split
- * pane at real sizes, drawer mode has the results filling the window and the roster parked in the
- * drawer.
+ * Walks the window across both collapse thresholds — width for the roster, height for the log —
+ * and holds the shell to its invariant at every size: each collapsible lives in exactly one home,
+ * laid out at real extent. Split mode means inside its split pane; collapsed means parked in its
+ * drawer while the results fill the freed axis.
  *
  * <p>The window gets a peer ({@code addNotify}) but is never shown. Each resize is dispatched as
  * its own EDT turn and the assertion runs turns later, so the RepaintManager's <em>asynchronous</em>
@@ -39,14 +39,16 @@ class ResponsiveLayoutTest {
     }
 
     @Test
-    void everyWidthLandsInExactlyOneMode() throws Exception {
+    void everySizeLandsInExactlyOneModePerAxis() throws Exception {
         var window = new Object() {
-            RunnerWindow runner;
             PlanningView planning;
             JSplitPane body;
+            JSplitPane resultsSplit;
             JPanel run;
+            JPanel logPanel;
             JPanel centerHost;
-            JPanel drawer;
+            JPanel rosterDrawerPanel;
+            JPanel logDrawerPanel;
         };
         SwingUtilities.invokeAndWait(
                 () -> {
@@ -56,13 +58,16 @@ class ResponsiveLayoutTest {
                                 RunnerWindow.class.getDeclaredConstructor(
                                         RunControl.class, RunnerWindow.Launcher.class);
                         ctor.setAccessible(true);
-                        window.runner = ctor.newInstance(new RunControl(), null);
-                        window.planning = field(window.runner, "planning");
-                        window.body = field(window.runner, "body");
-                        window.run = field(window.runner, "run");
-                        window.centerHost = field(window.runner, "centerHost");
-                        window.drawer = field(window.runner, "drawer");
-                        frame = field(window.runner, "frame");
+                        RunnerWindow runner = ctor.newInstance(new RunControl(), null);
+                        window.planning = field(runner, "planning");
+                        window.body = field(runner, "body");
+                        window.resultsSplit = field(runner, "resultsSplit");
+                        window.run = field(runner, "run");
+                        window.logPanel = field(runner, "logPanel");
+                        window.centerHost = field(runner, "centerHost");
+                        window.rosterDrawerPanel = drawerPanel(runner, "rosterDrawer");
+                        window.logDrawerPanel = drawerPanel(runner, "logDrawer");
+                        frame = field(runner, "frame");
                         // A peer without a visible window: layout runs for real, nothing shows.
                         frame.addNotify();
                         frame.validate();
@@ -71,30 +76,31 @@ class ResponsiveLayoutTest {
                     }
                 });
 
-        List<Integer> walk = new ArrayList<>();
-        // Pixel-fine around the threshold in both directions, then the jumpy strides of a fast
-        // native drag, then direction flapping right on the boundary.
+        // Pixel-fine across each threshold in both directions, the jumpy strides of a fast
+        // native drag, then direction flapping right on the boundary. One axis moves at a time;
+        // the other holds a value on each side of its own threshold.
+        List<int[]> walk = new ArrayList<>();
         for (int w = 1200; w >= 560; w--) {
-            walk.add(w);
-        }
-        for (int w = 560; w <= 1200; w++) {
-            walk.add(w);
-        }
-        for (int w = 1200; w >= 560; w -= 37) {
-            walk.add(w);
+            walk.add(new int[] {w, 900});
         }
         for (int w = 560; w <= 1200; w += 37) {
-            walk.add(w);
+            walk.add(new int[] {w, 700});
+        }
+        for (int h = 1000; h >= 480; h--) {
+            walk.add(new int[] {1200, h});
+        }
+        for (int h = 480; h <= 1000; h += 37) {
+            walk.add(new int[] {820, h});
         }
         for (int i = 0; i < 12; i++) {
-            walk.add(i % 2 == 0 ? 896 : 903);
+            walk.add(new int[] {i % 2 == 0 ? 896 : 903, i % 2 == 0 ? 756 : 763});
         }
 
         List<String> violations = new ArrayList<>();
-        for (int width : walk) {
+        for (int[] size : walk) {
             SwingUtilities.invokeAndWait(
                     () -> {
-                        frame.setSize(width, 900);
+                        frame.setSize(size[0], size[1]);
                         frame.dispatchEvent(
                                 new ComponentEvent(frame, ComponentEvent.COMPONENT_RESIZED));
                     });
@@ -103,46 +109,43 @@ class ResponsiveLayoutTest {
             SwingUtilities.invokeAndWait(() -> {});
             SwingUtilities.invokeAndWait(
                     () -> {
+                        String at = size[0] + "x" + size[1] + ": ";
+
                         boolean planningInSplit = window.body.getLeftComponent() == window.planning;
                         boolean runInSplit = window.body.getRightComponent() == window.run;
                         boolean bodyHosted = window.body.getParent() == window.centerHost;
                         boolean runHosted = window.run.getParent() == window.centerHost;
-                        boolean planningInDrawer = window.planning.getParent() == window.drawer;
-
-                        boolean split = planningInSplit && runInSplit && bodyHosted;
-                        boolean collapsed = runHosted && planningInDrawer && !bodyHosted;
-                        if (split == collapsed) {
+                        boolean planningInDrawer =
+                                window.planning.getParent() == window.rosterDrawerPanel;
+                        boolean rosterSplit = planningInSplit && runInSplit && bodyHosted;
+                        boolean rosterCollapsed = runHosted && planningInDrawer && !bodyHosted;
+                        if (rosterSplit == rosterCollapsed) {
                             violations.add(
-                                    width
-                                            + "px: planningInSplit=" + planningInSplit
-                                            + " runInSplit=" + runInSplit
-                                            + " bodyHosted=" + bodyHosted
-                                            + " runHosted=" + runHosted
-                                            + " planningInDrawer=" + planningInDrawer);
-                        } else if (split) {
-                            // Laid-out reality, not just attachment: both sides need real extent,
-                            // or the operator sees a divider beside a void.
-                            if (window.planning.getWidth() < 50 || window.planning.getHeight() < 50) {
-                                violations.add(
-                                        width + "px: split mode but roster laid out at "
-                                                + window.planning.getWidth() + "x"
-                                                + window.planning.getHeight());
-                            }
-                            if (window.run.getWidth() < 50 || window.run.getHeight() < 50) {
-                                violations.add(
-                                        width + "px: split mode but results laid out at "
-                                                + window.run.getWidth() + "x"
-                                                + window.run.getHeight());
-                            }
-                        } else {
-                            if (window.run.getWidth() < window.centerHost.getWidth() - 1
-                                    || window.run.getHeight() < 50) {
-                                violations.add(
-                                        width + "px: drawer mode but results laid out at "
-                                                + window.run.getWidth() + "x"
-                                                + window.run.getHeight() + " in a "
-                                                + window.centerHost.getWidth() + "px host");
-                            }
+                                    at + "roster in no single home: planningInSplit="
+                                            + planningInSplit + " runInSplit=" + runInSplit
+                                            + " bodyHosted=" + bodyHosted + " runHosted="
+                                            + runHosted + " planningInDrawer=" + planningInDrawer);
+                        } else if (rosterSplit
+                                && (window.planning.getWidth() < 50
+                                        || window.run.getWidth() < 50)) {
+                            violations.add(
+                                    at + "roster split laid out at planning="
+                                            + window.planning.getWidth() + "w run="
+                                            + window.run.getWidth() + "w");
+                        }
+
+                        boolean logInSplit =
+                                window.resultsSplit.getBottomComponent() == window.logPanel;
+                        boolean logInDrawer =
+                                window.logPanel.getParent() == window.logDrawerPanel;
+                        if (logInSplit == logInDrawer) {
+                            violations.add(
+                                    at + "log in no single home: inSplit=" + logInSplit
+                                            + " inDrawer=" + logInDrawer);
+                        } else if (logInSplit && window.logPanel.getHeight() < 50) {
+                            violations.add(
+                                    at + "log split laid out at " + window.logPanel.getHeight()
+                                            + "h");
                         }
                     });
         }
@@ -150,8 +153,18 @@ class ResponsiveLayoutTest {
                 violations.isEmpty(),
                 () ->
                         violations.size()
-                                + " widths broke the shell:\n"
-                                + String.join("\n", violations.subList(0, Math.min(20, violations.size()))));
+                                + " sizes broke the shell:\n"
+                                + String.join(
+                                        "\n",
+                                        violations.subList(0, Math.min(20, violations.size()))));
+    }
+
+    private static JPanel drawerPanel(RunnerWindow runner, String name)
+            throws ReflectiveOperationException {
+        Object drawer = field(runner, name);
+        Field panel = drawer.getClass().getDeclaredField("panel");
+        panel.setAccessible(true);
+        return (JPanel) panel.get(drawer);
     }
 
     @SuppressWarnings("unchecked")
