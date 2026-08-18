@@ -136,6 +136,29 @@ public final class JarProbe {
                 List.copyOf(conflicts));
     }
 
+    /**
+     * Whether this jar loads through FML's plugin path rather than as an ordinary mod.
+     *
+     * <p>A jar that ships a language loader or transformation service is picked up before mod
+     * construction ("Loading FML Plugins" in the game log) and does its work there; it never
+     * becomes a runtime mod-list entry, however honest its {@code mods.toml} looks. The runtime
+     * inventory check has to know, or it reads FML working as designed as a materialisation
+     * failure. An unreadable jar answers false — the caller keeps whatever suspicion it had.
+     */
+    public static boolean loaderPlugin(Path jar) {
+        try (ZipFile zip = new ZipFile(jar.toFile())) {
+            return zip.stream()
+                    .anyMatch(
+                            entry ->
+                                    entry.getName().startsWith("META-INF/services/net.neoforged.neoforgespi.")
+                                            || entry.getName()
+                                                    .equals(
+                                                            "META-INF/services/cpw.mods.modlauncher.api.ITransformationService"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     /** Everything one jar declares, payloads included; null for a jar with no manifest at all. */
     static Declared declared(Path jar) {
         try (ZipFile zip = new ZipFile(jar.toFile())) {

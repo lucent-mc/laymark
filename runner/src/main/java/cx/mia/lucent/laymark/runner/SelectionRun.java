@@ -216,7 +216,12 @@ public final class SelectionRun {
                     }
 
                     scenarioListRevision = result.scenarioListRevision();
-                    requireInventory(arm, result, participants, modIdByFile);
+                    requireInventory(
+                            arm,
+                            result,
+                            participants,
+                            modIdByFile,
+                            instance.gameDirectory().resolve("mods"));
                     collectTrustFlags(trustFlags, sequence, arm, result);
 
                     if (!arm.scored()) {
@@ -441,13 +446,26 @@ public final class SelectionRun {
      * must not.
      */
     private static void requireInventory(
-            Arm arm, RunResult result, Set<String> participants, Map<String, String> modIdByFile) {
+            Arm arm,
+            RunResult result,
+            Set<String> participants,
+            Map<String, String> modIdByFile,
+            java.nio.file.Path modsDir) {
         if (result.loadedMods().isEmpty()) {
             return; // an older mod build; nothing to verify against
         }
         for (String file : arm.enabled()) {
             String modId = modIdByFile.get(file);
             if (modId != null && !result.loadedMods().contains(modId)) {
+                // Consulted only on the failure path: a jar that ships a loader plugin (an FML
+                // language loader or transformation service — Configured Defaults is one) is
+                // honoured before mod construction and never becomes a mod-list entry, so its
+                // absence there is FML working as designed, not a materialisation failure.
+                // Unverifiable is not the same as missing.
+                if (cx.mia.lucent.laymark.runner.select.JarProbe.loaderPlugin(
+                        modsDir.resolve(file))) {
+                    continue;
+                }
                 throw new LaunchException(
                         "arm " + arm.id() + " enabled " + file + " but the game did not load "
                                 + modId + "; materialisation did not produce this arm");
