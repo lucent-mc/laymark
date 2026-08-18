@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Stream;
+import javax.swing.AbstractButton;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
@@ -111,7 +112,7 @@ public final class PlanningView extends JPanel {
     private final JLabel modCount = Theme.muted("");
     private final Map<String, RoleControl> roles = new LinkedHashMap<>();
     private final JTextField search = new JTextField(18);
-    private final JPanel presetRow = row();
+    private final OverflowRow presetRow = new OverflowRow(Theme.muted("Baseline:"));
 
     private final cx.mia.lucent.laymark.runner.select.ProbeCache probeCache =
             cx.mia.lucent.laymark.runner.select.ProbeCache.open();
@@ -420,49 +421,70 @@ public final class PlanningView extends JPanel {
      * would be a second way to say something the roster already says.
      */
     private JPanel presets() {
-        presetRow.removeAll();
-        presetRow.add(Theme.muted("Baseline:"));
+        // Short labels, full names in the tooltip: the sidebar's narrow states are supported
+        // states, and a preset whose label truncates to "Pack min…" has stopped saying what it
+        // does. Whatever still does not fit folds behind the row's "…" menu instead of clipping.
+        presetRow.clearItems();
 
-        JButton minusCandidates = Theme.button("Pack minus candidates", false);
+        JButton minusCandidates = Theme.button("Pack", false);
         minusCandidates.setToolTipText(
-                "Everything installed stays in the baseline except the candidates. Answers: what"
-                        + " does this mod add to the pack as it stands?");
+                tooltip(
+                        "Pack minus candidates",
+                        "Everything installed stays in the baseline except the candidates."
+                                + " Answers: what does this mod add to the pack as it stands?"));
         minusCandidates.addActionListener(unused -> assign(name -> Role.BASELINE));
-        presetRow.add(minusCandidates);
+        presetRow.addItem(minusCandidates);
 
-        JButton blank = Theme.button("Blank slate", false);
+        JButton blank = Theme.button("Blank", false);
         blank.setToolTipText(
-                "Nothing but the candidates and whatever they require. Answers: what does this mod"
-                        + " do on its own?");
+                tooltip(
+                        "Blank slate",
+                        "Nothing but the candidates and whatever they require. Answers: what does"
+                                + " this mod do on its own?"));
         blank.addActionListener(unused -> assign(name -> Role.OFF));
-        presetRow.add(blank);
+        presetRow.addItem(blank);
 
         // Only offered when there is an index to read. A button that silently means "vanilla"
         // because no ancestry was recorded is a button that has answered a different question.
         Set<String> added = inlayLayer();
         if (added != null) {
-            JButton parent = Theme.button("Inlay parent minus candidates", false);
+            JButton parent = Theme.button("Inlay parent", false);
             parent.setToolTipText(
-                    "Everything this layer adds is withheld, so candidates are measured against the"
-                            + " layer underneath. For a root layer that parent is vanilla.");
+                    tooltip(
+                            "Inlay parent minus candidates",
+                            "Everything this layer adds is withheld, so candidates are measured"
+                                    + " against the layer underneath. For a root layer that parent"
+                                    + " is vanilla."));
             parent.addActionListener(unused -> assignInlayParent());
-            presetRow.add(parent);
+            presetRow.addItem(parent);
         }
 
         // Only offered when a previous run promoted something: continuing from nothing is the
         // Blank slate button, not this one wearing a misleading name.
         List<String> winners = previousWinners();
         if (!winners.isEmpty()) {
-            JButton previous = Theme.button("Previous run's winners", false);
+            JButton previous = Theme.button("Last winners", false);
             previous.setToolTipText(
-                    "Blank slate plus what the last run promoted: " + String.join(", ", winners)
-                            + ". Candidates are measured against the stack the last selection"
-                            + " arrived at, so runs chain instead of starting over.");
+                    tooltip(
+                            "Previous run's winners",
+                            "Blank slate plus what the last run promoted: "
+                                    + String.join(", ", winners)
+                                    + ". Candidates are measured against the stack the last"
+                                    + " selection arrived at, so runs chain instead of starting"
+                                    + " over."));
             previous.addActionListener(
                     unused -> assign(name -> winners.contains(name) ? Role.BASELINE : Role.OFF));
-            presetRow.add(previous);
+            presetRow.addItem(previous);
         }
+        presetRow.revalidate();
+        presetRow.repaint();
         return presetRow;
+    }
+
+    /** The preset's full name over its explanation, wrapped: the label only had to be short. */
+    private static String tooltip(String fullName, String explanation) {
+        return "<html><body style='width: 280px'><b>" + fullName + "</b><br>" + explanation
+                + "</body></html>";
     }
 
     /**
@@ -574,6 +596,121 @@ public final class PlanningView extends JPanel {
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         row.setOpaque(false);
         return row;
+    }
+
+    /**
+     * A single-line row of buttons that folds what does not fit behind a "…" menu.
+     *
+     * <p>The alternative behaviours are both worse: a FlowLayout clips trailing buttons without a
+     * trace, and truncated labels stop saying what the button does. Buttons keep their declared
+     * order; the first one that does not fit and everything after it move into the menu, so the
+     * row never shows a gap-toothed subset.
+     */
+    private static final class OverflowRow extends JPanel {
+
+        private static final int GAP = 8;
+
+        private final Component caption;
+        private final List<AbstractButton> items = new ArrayList<>();
+        private final JButton more = Theme.button("…", false);
+
+        OverflowRow(Component caption) {
+            super(null); // laid out by hand in doLayout
+            setOpaque(false);
+            this.caption = caption;
+            more.setToolTipText("The presets that do not fit");
+            more.addActionListener(unused -> menu());
+            add(caption);
+            add(more);
+        }
+
+        void clearItems() {
+            items.forEach(this::remove);
+            items.clear();
+        }
+
+        void addItem(AbstractButton button) {
+            items.add(button);
+            add(button);
+        }
+
+        /** The hidden buttons as menu entries, delegating to the buttons so behaviour has one home. */
+        private void menu() {
+            var popup = new javax.swing.JPopupMenu();
+            for (AbstractButton hidden : items) {
+                if (hidden.isVisible()) {
+                    continue;
+                }
+                var item = new javax.swing.JMenuItem(hidden.getText());
+                item.setToolTipText(hidden.getToolTipText());
+                item.setEnabled(hidden.isEnabled());
+                item.addActionListener(unused -> hidden.doClick());
+                popup.add(item);
+            }
+            popup.show(more, 0, more.getHeight());
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            int width = caption.getPreferredSize().width;
+            int height = caption.getPreferredSize().height;
+            for (AbstractButton item : items) {
+                width += GAP + item.getPreferredSize().width;
+                height = Math.max(height, item.getPreferredSize().height);
+            }
+            return new Dimension(width, Math.max(height, more.getPreferredSize().height));
+        }
+
+        @Override
+        public Dimension getMinimumSize() {
+            return new Dimension(
+                    caption.getPreferredSize().width + GAP + more.getPreferredSize().width,
+                    getPreferredSize().height);
+        }
+
+        @Override
+        public Dimension getMaximumSize() {
+            return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+        }
+
+        @Override
+        public void doLayout() {
+            int width = getWidth();
+            int height = getHeight();
+            int x = 0;
+            place(caption, x, height);
+            x += caption.getPreferredSize().width;
+
+            int needed = 0;
+            for (AbstractButton item : items) {
+                needed += GAP + item.getPreferredSize().width;
+            }
+            boolean allFit = x + needed <= width;
+            int reserved = allFit ? 0 : GAP + more.getPreferredSize().width;
+
+            boolean overflowing = false;
+            for (AbstractButton item : items) {
+                int itemWidth = item.getPreferredSize().width;
+                if (!overflowing && x + GAP + itemWidth + reserved <= width) {
+                    x += GAP;
+                    place(item, x, height);
+                    x += itemWidth;
+                    item.setVisible(true);
+                } else {
+                    overflowing = true;
+                    item.setVisible(false);
+                }
+            }
+            more.setVisible(!allFit);
+            if (!allFit) {
+                place(more, x + GAP, height);
+            }
+        }
+
+        private static void place(Component component, int x, int rowHeight) {
+            Dimension pref = component.getPreferredSize();
+            component.setBounds(x, (rowHeight - pref.height) / 2, pref.width, pref.height);
+        }
     }
 
     private void reloadMods() {
