@@ -234,6 +234,9 @@ public final class PlanningView extends JPanel {
         constraints.gridx = 1;
         constraints.weightx = 1;
         constraints.anchor = java.awt.GridBagConstraints.WEST;
+        // Filled, not floated: the row must be told the cell's real width, or it lays out at its
+        // one-line preferred width and the surplus is clipped off the sidebar's edge.
+        constraints.fill = java.awt.GridBagConstraints.HORIZONTAL;
         constraints.insets = new java.awt.Insets(y == 0 ? 0 : 6, 0, 0, 0);
         grid.add(value, constraints);
     }
@@ -593,9 +596,99 @@ public final class PlanningView extends JPanel {
     }
 
     private static JPanel row() {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel row = new JPanel(new WrapRow());
         row.setOpaque(false);
         return row;
+    }
+
+    /**
+     * A left-to-right row that wraps to more lines when narrow and reports its true height.
+     *
+     * <p>FlowLayout wraps its children but keeps claiming one line of height, so in a narrow
+     * sidebar the wrapped components painted under the next form row or vanished off the edge.
+     * This one returns the height the wrapping actually needs — and because GridBagLayout sizes
+     * cells from a preferred size computed before the final width is known, it revalidates itself
+     * once when it discovers its laid-out height is stale, which settles in one extra pass.
+     */
+    private static final class WrapRow implements java.awt.LayoutManager {
+
+        private static final int HGAP = 8;
+        private static final int VGAP = 4;
+
+        @Override
+        public void addLayoutComponent(String name, Component component) {}
+
+        @Override
+        public void removeLayoutComponent(Component component) {}
+
+        @Override
+        public Dimension preferredLayoutSize(java.awt.Container parent) {
+            return layout(parent, parent.getWidth() > 0 ? parent.getWidth() : Integer.MAX_VALUE, false);
+        }
+
+        @Override
+        public Dimension minimumLayoutSize(java.awt.Container parent) {
+            // Narrower is answered by wrapping, so the minimum width is nearly nothing; the
+            // height is whatever the current width's wrapping needs.
+            return new Dimension(40, preferredLayoutSize(parent).height);
+        }
+
+        @Override
+        public void layoutContainer(java.awt.Container parent) {
+            Dimension needed = layout(parent, parent.getWidth(), true);
+            if (needed.height != parent.getHeight()) {
+                javax.swing.SwingUtilities.invokeLater(parent::revalidate);
+            }
+        }
+
+        private record Placed(Component component, int x, int width, int height) {}
+
+        private Dimension layout(java.awt.Container parent, int width, boolean apply) {
+            List<Placed> line = new ArrayList<>();
+            int x = 0;
+            int y = 0;
+            int lineHeight = 0;
+            int widest = 0;
+            for (Component child : parent.getComponents()) {
+                if (!child.isVisible()) {
+                    continue;
+                }
+                Dimension pref = child.getPreferredSize();
+                int childWidth = Math.min(pref.width, width);
+                if (x > 0 && x + HGAP + childWidth > width) {
+                    if (apply) {
+                        place(line, y, lineHeight);
+                    }
+                    line.clear();
+                    y += lineHeight + VGAP;
+                    x = 0;
+                    lineHeight = 0;
+                }
+                if (x > 0) {
+                    x += HGAP;
+                }
+                line.add(new Placed(child, x, childWidth, pref.height));
+                x += childWidth;
+                lineHeight = Math.max(lineHeight, pref.height);
+                widest = Math.max(widest, x);
+            }
+            if (apply) {
+                place(line, y, lineHeight);
+            }
+            return new Dimension(widest, y + lineHeight);
+        }
+
+        /** Sets one line's bounds, centred on the line's own axis. */
+        private static void place(List<Placed> line, int lineY, int lineHeight) {
+            for (Placed placed : line) {
+                placed.component()
+                        .setBounds(
+                                placed.x(),
+                                lineY + (lineHeight - placed.height()) / 2,
+                                placed.width(),
+                                placed.height());
+            }
+        }
     }
 
     /**

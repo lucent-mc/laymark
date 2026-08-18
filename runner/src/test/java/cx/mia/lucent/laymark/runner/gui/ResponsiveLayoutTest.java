@@ -104,9 +104,21 @@ class ResponsiveLayoutTest {
                         frame.dispatchEvent(
                                 new ComponentEvent(frame, ComponentEvent.COMPONENT_RESIZED));
                     });
-            // Empty turns so the RepaintManager's queued validation runs before we look.
+            // Deferred turns, then a validate: on a showing frame the RepaintManager validates
+            // invalid roots after revalidate(); an unshown frame drops that, so the probe plays
+            // the RepaintManager's part itself. validate() on a valid tree is a no-op.
             SwingUtilities.invokeAndWait(() -> {});
+            SwingUtilities.invokeAndWait(
+                    () -> {
+                        frame.validate();
+                        frame.getRootPane().validate();
+                    });
             SwingUtilities.invokeAndWait(() -> {});
+            SwingUtilities.invokeAndWait(
+                    () -> {
+                        frame.validate();
+                        frame.getRootPane().validate();
+                    });
             SwingUtilities.invokeAndWait(
                     () -> {
                         String at = size[0] + "x" + size[1] + ": ";
@@ -149,6 +161,40 @@ class ResponsiveLayoutTest {
                         }
                     });
         }
+        // The sidebar's own narrow states: drag the divider in and hold the Instance card to
+        // "every component stays inside its parent" — the invariant FlowLayout rows broke by
+        // wrapping into space their row never claimed, painting the Edit button under the next
+        // row and pushing the version picker off the edge.
+        for (int divider : new int[] {300, 330, 360, 400, 430}) {
+            SwingUtilities.invokeAndWait(
+                    () -> {
+                        frame.setSize(1200, 900);
+                        frame.dispatchEvent(
+                                new ComponentEvent(frame, ComponentEvent.COMPONENT_RESIZED));
+                        window.body.setDividerLocation(divider);
+                    });
+            // Wrapping rows converge over a few passes: layout discovers the stale height,
+            // revalidates, and the next validation applies it. Give the cascade room, playing
+            // the RepaintManager's validating part since the frame is never shown.
+            for (int i = 0; i < 6; i++) {
+                SwingUtilities.invokeAndWait(() -> {});
+                SwingUtilities.invokeAndWait(
+                    () -> {
+                        frame.validate();
+                        frame.getRootPane().validate();
+                    });
+            }
+            SwingUtilities.invokeAndWait(
+                    () -> {
+                        java.awt.Container card = cardTitled(window.planning, "Instance");
+                        if (card == null) {
+                            violations.add("divider " + divider + ": no Instance card found");
+                            return;
+                        }
+                        assertContained(card, "divider " + divider + ": ", violations);
+                    });
+        }
+
         assertTrue(
                 violations.isEmpty(),
                 () ->
@@ -157,6 +203,54 @@ class ResponsiveLayoutTest {
                                 + String.join(
                                         "\n",
                                         violations.subList(0, Math.min(20, violations.size()))));
+    }
+
+    /** The Theme.card panel whose heading label carries the given title. */
+    private static java.awt.Container cardTitled(java.awt.Container root, String title) {
+        for (java.awt.Component child : root.getComponents()) {
+            if (child instanceof JPanel panel
+                    && panel.getComponentCount() > 0
+                    && panel.getComponent(0) instanceof javax.swing.JLabel label
+                    && title.equals(label.getText())) {
+                return panel;
+            }
+            if (child instanceof java.awt.Container container) {
+                java.awt.Container found = cardTitled(container, title);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Every visible component must sit inside its parent; a scroll pane clips by design. */
+    private static void assertContained(
+            java.awt.Container parent, String at, List<String> violations) {
+        for (java.awt.Component child : parent.getComponents()) {
+            if (!child.isVisible() || child.getWidth() <= 0 || child.getHeight() <= 0) {
+                continue;
+            }
+            if (child.getX() < 0
+                    || child.getY() < 0
+                    || child.getX() + child.getWidth() > parent.getWidth()
+                    || child.getY() + child.getHeight() > parent.getHeight()) {
+                violations.add(
+                        at
+                                + child.getClass().getSimpleName()
+                                + child.getBounds()
+                                + " overflows "
+                                + parent.getClass().getSimpleName()
+                                + " "
+                                + parent.getWidth()
+                                + "x"
+                                + parent.getHeight());
+            }
+            if (child instanceof java.awt.Container container
+                    && !(child instanceof javax.swing.JScrollPane)) {
+                assertContained(container, at, violations);
+            }
+        }
     }
 
     private static JPanel drawerPanel(RunnerWindow runner, String name)
