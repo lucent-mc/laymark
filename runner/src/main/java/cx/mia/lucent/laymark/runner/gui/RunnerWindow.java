@@ -1001,6 +1001,7 @@ public final class RunnerWindow implements ExperimentListener {
 
         JPanel headline = new JPanel(new BorderLayout(8, 0));
         headline.setOpaque(false);
+        headline.setAlignmentX(Component.LEFT_ALIGNMENT);
         JLabel name = new JLabel(rank + ".  " + display(preliminary.id()));
         name.setForeground(Theme.TEXT);
         name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
@@ -1039,6 +1040,9 @@ public final class RunnerWindow implements ExperimentListener {
         grid.setAlignmentX(Component.LEFT_ALIGNMENT);
         var constraints = new java.awt.GridBagConstraints();
         constraints.anchor = java.awt.GridBagConstraints.WEST;
+        // Every column shares the surplus equally, so the table spans the card instead of
+        // huddling at its preferred width -- a clipped huddle, once the card was narrower.
+        constraints.weightx = 1;
         for (int i = 0; i < statColumns.size(); i++) {
             StatColumn column = statColumns.get(i);
             constraints.gridx = i;
@@ -1052,7 +1056,10 @@ public final class RunnerWindow implements ExperimentListener {
             value.setToolTipText(column.tooltip());
             grid.add(value, constraints);
         }
-        grid.setMaximumSize(grid.getPreferredSize());
+        // Full width, own height: the card's BoxLayout centres and clips a child that claims a
+        // fixed width wider than the card, which read as a mysterious left indent.
+        grid.setMaximumSize(
+                new Dimension(Integer.MAX_VALUE, grid.getPreferredSize().height));
         return grid;
     }
 
@@ -1142,6 +1149,7 @@ public final class RunnerWindow implements ExperimentListener {
 
         JPanel headline = new JPanel(new BorderLayout(8, 0));
         headline.setOpaque(false);
+        headline.setAlignmentX(Component.LEFT_ALIGNMENT);
         JLabel name = new JLabel((winner ? "★ " : "") + display(score.id()));
         name.setForeground(winner ? Theme.GOOD : Theme.TEXT);
         name.setFont(name.getFont().deriveFont(winner ? Font.BOLD : Font.PLAIN, 13f));
