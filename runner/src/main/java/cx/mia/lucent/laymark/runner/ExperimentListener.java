@@ -4,6 +4,7 @@ import cx.mia.lucent.laymark.core.experiment.Arm;
 import cx.mia.lucent.laymark.core.report.SelectionReport;
 import cx.mia.lucent.laymark.core.stats.Comparison;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What an experiment tells whoever is watching it.
@@ -78,6 +79,9 @@ public interface ExperimentListener {
      * not be measured. {@code vsOriginalPercent} is null in round 1, where the current baseline
      * <em>is</em> the original.
      */
+    /** One scenario's metric channels for one candidate, as candidate-mean minus baseline-mean. */
+    record ScenarioChannels(Double msptDelta, Double fpsDelta, Double msPerChunkDelta) {}
+
     record CandidateScore(
             String id,
             double score,
@@ -86,7 +90,13 @@ public interface ExperimentListener {
             Double msPerChunkDelta,
             Double vsOriginalPercent,
             String verdict,
-            String detail) {
+            String detail,
+            java.util.Map<String, ScenarioChannels> scenarioChannels) {
+
+        public CandidateScore {
+            scenarioChannels =
+                    scenarioChannels == null ? java.util.Map.of() : Map.copyOf(scenarioChannels);
+        }
 
         public String describe() {
             StringBuilder text = new StringBuilder(id);

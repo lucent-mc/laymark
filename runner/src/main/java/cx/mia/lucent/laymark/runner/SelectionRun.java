@@ -707,25 +707,48 @@ public final class SelectionRun {
             List<Comparison.Run> baselineRuns,
             Map<String, Double> vsOriginal) {
 
-        Metrics baseline =
-                meanMetrics(
-                        measured.stream()
-                                .filter(
-                                        m ->
-                                                baselineRuns.stream()
-                                                        .anyMatch(
-                                                                run ->
-                                                                        run.sequence()
-                                                                                == m.sequence()))
-                                .toList());
+        List<Measured> baselineMeasured =
+                measured.stream()
+                        .filter(
+                                m ->
+                                        baselineRuns.stream()
+                                                .anyMatch(run -> run.sequence() == m.sequence()))
+                        .toList();
+        Metrics baseline = meanMetrics(baselineMeasured);
 
         List<ExperimentListener.CandidateScore> scores = new ArrayList<>();
         for (Selection.Outcome outcome : outcomes) {
             String id = outcome.bundle().candidate();
             List<Comparison> comparisons = byCandidate.getOrDefault(id, List.of());
-            Metrics own =
-                    meanMetrics(
-                            measured.stream().filter(m -> m.armId().equals(id)).toList());
+            List<Measured> ownMeasured =
+                    measured.stream().filter(m -> m.armId().equals(id)).toList();
+            Metrics own = meanMetrics(ownMeasured);
+
+            // The same channels again, per scenario: the card's expandable sections show where
+            // an aggregate delta actually came from.
+            Map<String, ExperimentListener.ScenarioChannels> channels = new LinkedHashMap<>();
+            for (String scenarioId :
+                    ownMeasured.stream().map(Measured::scenarioId).distinct().sorted().toList()) {
+                Metrics ownScenario =
+                        meanMetrics(
+                                ownMeasured.stream()
+                                        .filter(m -> m.scenarioId().equals(scenarioId))
+                                        .toList());
+                Metrics baselineScenario =
+                        meanMetrics(
+                                baselineMeasured.stream()
+                                        .filter(m -> m.scenarioId().equals(scenarioId))
+                                        .toList());
+                channels.put(
+                        scenarioId,
+                        new ExperimentListener.ScenarioChannels(
+                                delta(ownScenario.mspt(), baselineScenario.mspt()),
+                                delta(ownScenario.fps(), baselineScenario.fps()),
+                                delta(
+                                        ownScenario.msPerChunk(),
+                                        baselineScenario.msPerChunk())));
+            }
+
             scores.add(
                     new ExperimentListener.CandidateScore(
                             id,
@@ -737,7 +760,8 @@ public final class SelectionRun {
                             delta(own.msPerChunk(), baseline.msPerChunk()),
                             vsOriginal.get(id),
                             outcome.verdict().toString().toLowerCase(java.util.Locale.ROOT),
-                            outcome.detail()));
+                            outcome.detail(),
+                            channels));
         }
         return scores;
     }

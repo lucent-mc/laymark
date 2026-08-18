@@ -964,8 +964,13 @@ public final class RunnerWindow implements ExperimentListener {
         holder.setOpaque(false);
         holder.add(liveRows, BorderLayout.NORTH);
 
+        // Vertically scrollable: an expanded card can want more height than the column has, and
+        // a column with no scrollbar would clip the very detail someone just asked to see.
+        JScrollPane rowScroll = Theme.scroll(holder);
+        rowScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+
         liveColumn.add(header, BorderLayout.NORTH);
-        liveColumn.add(holder, BorderLayout.CENTER);
+        liveColumn.add(rowScroll, BorderLayout.CENTER);
         columns.add(liveColumn);
         columns.add(Box.createHorizontalStrut(10));
     }
@@ -1015,13 +1020,7 @@ public final class RunnerWindow implements ExperimentListener {
         card.add(headline);
         card.add(preliminaryGrid(preliminary));
 
-        JPanel spacer = new JPanel(new BorderLayout());
-        spacer.setOpaque(false);
-        spacer.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 6, 0));
-        spacer.add(card, BorderLayout.CENTER);
-        spacer.setAlignmentX(Component.LEFT_ALIGNMENT);
-        spacer.setMaximumSize(new Dimension(Integer.MAX_VALUE, spacer.getPreferredSize().height));
-        return spacer;
+        return fullWidthRow(card);
     }
 
     /** One header-over-value column of a card's stats table. */
@@ -1136,7 +1135,11 @@ public final class RunnerWindow implements ExperimentListener {
         liveRows = null;
     }
 
-    /** One candidate's round, led by the score because the score is what ranks it. */
+    /**
+     * One candidate's round, led by the score because the score is what ranks it. The card
+     * expands from its headline into per-scenario sections, each expanding again into the full
+     * stat list — three depths of the same answer, each one click apart.
+     */
     private JPanel candidateCard(CandidateScore score, List<Comparison> comparisons, boolean winner) {
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
@@ -1150,15 +1153,20 @@ public final class RunnerWindow implements ExperimentListener {
         JPanel headline = new JPanel(new BorderLayout(8, 0));
         headline.setOpaque(false);
         headline.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel chevron = Theme.small("▸");
+        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        title.setOpaque(false);
         JLabel name = new JLabel((winner ? "★ " : "") + display(score.id()));
         name.setForeground(winner ? Theme.GOOD : Theme.TEXT);
         name.setFont(name.getFont().deriveFont(winner ? Font.BOLD : Font.PLAIN, 13f));
+        title.add(chevron);
+        title.add(name);
         JLabel scoreLabel =
                 Theme.mono(
                         String.format(Locale.ROOT, "%+.1f", score.score()),
                         score.score() > 0 ? Theme.GOOD : score.score() < 0 ? Theme.BAD : Theme.MUTED);
         scoreLabel.setFont(scoreLabel.getFont().deriveFont(Font.BOLD, 13f));
-        headline.add(name, BorderLayout.WEST);
+        headline.add(title, BorderLayout.WEST);
         headline.add(scoreLabel, BorderLayout.EAST);
         card.add(headline);
 
@@ -1179,12 +1187,173 @@ public final class RunnerWindow implements ExperimentListener {
         verdict.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(verdict);
 
-        JPanel spacer = new JPanel(new BorderLayout());
+        JPanel details = new ExpandingPanel();
+        details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
+        details.setOpaque(false);
+        details.setAlignmentX(Component.LEFT_ALIGNMENT);
+        details.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        details.setVisible(false);
+        if (comparisons.isEmpty()) {
+            JLabel none = Theme.small("no per-scenario comparison; a scenario needs 2+ arms");
+            none.setAlignmentX(Component.LEFT_ALIGNMENT);
+            details.add(none);
+        }
+        for (Comparison comparison :
+                comparisons.stream()
+                        .sorted(java.util.Comparator.comparing(Comparison::scenarioId))
+                        .toList()) {
+            details.add(
+                    scenarioSection(
+                            comparison, score.scenarioChannels().get(comparison.scenarioId())));
+        }
+        card.add(details);
+        wireExpander(headline, chevron, details);
+
+        return fullWidthRow(card);
+    }
+
+    /** One scenario's stats, behind its own header: id and headline percent, then the list. */
+    private JPanel scenarioSection(
+            Comparison comparison, ExperimentListener.ScenarioChannels channels) {
+        JPanel section = new ExpandingPanel();
+        section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+        section.setOpaque(false);
+        section.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel chevron = Theme.small("▸");
+        JPanel header = new JPanel(new BorderLayout(6, 0));
+        header.setOpaque(false);
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        title.setOpaque(false);
+        title.add(chevron);
+        title.add(Theme.small(comparison.scenarioId()));
+        header.add(title, BorderLayout.WEST);
+        header.add(
+                Theme.mono(
+                        String.format(Locale.ROOT, "%+.1f%%", comparison.improvementPercent()),
+                        bandColour(comparison)),
+                BorderLayout.EAST);
+        header.setMaximumSize(
+                new Dimension(Integer.MAX_VALUE, header.getPreferredSize().height));
+
+        // The stat list: label left, value right, one fact per line — a reading list, not the
+        // at-a-glance grid above it.
+        JPanel body = new ExpandingPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setOpaque(false);
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 16, 4, 0));
+        body.setVisible(false);
+        body.add(
+                statRow(
+                        "improvement",
+                        String.format(Locale.ROOT, "%+.1f%%", comparison.improvementPercent()),
+                        bandColour(comparison)));
+        // The comparison's interval is change (negative is faster); shown as improvement, so the
+        // ends swap and flip sign.
+        body.add(
+                statRow(
+                        "95% interval",
+                        String.format(
+                                Locale.ROOT,
+                                "%+.1f%% … %+.1f%%",
+                                -comparison.highPercent(),
+                                -comparison.lowPercent()),
+                        Theme.MUTED));
+        body.add(
+                statRow(
+                        "verdict",
+                        comparison.band().toString().toLowerCase(Locale.ROOT).replace('_', ' '),
+                        bandColour(comparison)));
+        body.add(statRow("pairs", Integer.toString(comparison.pairs()), Theme.TEXT));
+        if (comparison.voided() > 0) {
+            body.add(statRow("voided", Integer.toString(comparison.voided()), Theme.BAD));
+        }
+        body.add(
+                statRow(
+                        "noise floor",
+                        String.format(Locale.ROOT, "%.1f%%", comparison.floorPercent()),
+                        Theme.MUTED));
+        if (channels != null) {
+            if (channels.msptDelta() != null) {
+                body.add(
+                        statRow(
+                                "mspt vs baseline",
+                                String.format(Locale.ROOT, "%+.1f", channels.msptDelta()),
+                                direction(channels.msptDelta(), true)));
+            }
+            if (channels.fpsDelta() != null) {
+                body.add(
+                        statRow(
+                                "fps vs baseline",
+                                String.format(Locale.ROOT, "%+.0f", channels.fpsDelta()),
+                                direction(channels.fpsDelta(), false)));
+            }
+            if (channels.msPerChunkDelta() != null) {
+                body.add(
+                        statRow(
+                                "ms/chunk vs baseline",
+                                String.format(Locale.ROOT, "%+.2f", channels.msPerChunkDelta()),
+                                direction(channels.msPerChunkDelta(), true)));
+            }
+        }
+
+        section.add(header);
+        section.add(body);
+        wireExpander(header, chevron, body);
+        return section;
+    }
+
+    /** One fact: its name on the left edge, its value on the right, nothing between. */
+    private static JPanel statRow(String label, String value, Color colour) {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.add(Theme.small(label), BorderLayout.WEST);
+        JLabel valueLabel = Theme.mono(value, colour);
+        row.add(valueLabel, BorderLayout.EAST);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+        return row;
+    }
+
+    /** Click the header, toggle the body; the chevron says which way it stands. */
+    private static void wireExpander(
+            javax.swing.JComponent header, JLabel chevron, javax.swing.JComponent body) {
+        header.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        header.addMouseListener(
+                new java.awt.event.MouseAdapter() {
+                    @Override
+                    public void mousePressed(java.awt.event.MouseEvent unused) {
+                        boolean show = !body.isVisible();
+                        body.setVisible(show);
+                        chevron.setText(show ? "▾" : "▸");
+                        body.getParent().revalidate();
+                        body.getParent().repaint();
+                    }
+                });
+    }
+
+    /**
+     * A panel whose maximum height tracks its <em>current</em> preferred height, so expanding a
+     * child actually grows it — a maximum captured once at build time would pin the card at its
+     * collapsed size forever.
+     */
+    private static class ExpandingPanel extends JPanel {
+        @Override
+        public Dimension getMaximumSize() {
+            return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+        }
+    }
+
+    /** Full column width, own height — recomputed live, so expansion can grow the row. */
+    private static JPanel fullWidthRow(JPanel card) {
+        JPanel spacer = new ExpandingPanel();
+        spacer.setLayout(new BorderLayout());
         spacer.setOpaque(false);
         spacer.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 6, 0));
         spacer.add(card, BorderLayout.CENTER);
         spacer.setAlignmentX(Component.LEFT_ALIGNMENT);
-        spacer.setMaximumSize(new Dimension(Integer.MAX_VALUE, spacer.getPreferredSize().height));
         return spacer;
     }
 
