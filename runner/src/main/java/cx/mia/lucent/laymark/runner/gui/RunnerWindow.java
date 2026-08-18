@@ -70,6 +70,20 @@ public final class RunnerWindow implements ExperimentListener {
     private final JFrame frame = new JFrame("Laymark");
     private final PlanningView planning = new PlanningView();
 
+    // Responsive shell: wide windows show the roster as a split-pane sidebar; below the
+    // threshold it collapses into a drawer that slides over the results on demand.
+    private static final int COLLAPSE_THRESHOLD = 900;
+    private static final int DRAWER_WIDTH = 400;
+    private javax.swing.JSplitPane body;
+    private JPanel run;
+    private final JPanel centerHost = new JPanel(new BorderLayout());
+    private final JPanel drawer = new JPanel(new BorderLayout());
+    private JPanel scrim;
+    private final JButton hamburger = Theme.button("☰", false);
+    private boolean railCollapsed;
+    private boolean drawerShown;
+    private Timer drawerAnimator;
+
     private final JButton startButton = Theme.button("Start", true);
     private final JButton stopButton = Theme.button("Stop", false);
     private final Theme.Dot statusDot = new Theme.Dot(Theme.MUTED, true);
@@ -136,9 +150,14 @@ public final class RunnerWindow implements ExperimentListener {
         // wants wide columns, and only the operator knows which they are doing.
         planning.setMinimumSize(new Dimension(300, 0));
 
-        var body =
-                new javax.swing.JSplitPane(
-                        javax.swing.JSplitPane.HORIZONTAL_SPLIT, planning, runView());
+        run = runView();
+        // The split pane bounds dragging by component minimums, and BorderLayout reports the
+        // widest child's minimum -- which here is an unwrappable caption, several hundred pixels
+        // of it. In the narrow strip the window docks into beside the game, that phantom minimum
+        // consumed the whole drag range and froze the divider. Zero it: a clipped caption is
+        // recoverable with a drag, a divider that will not drag is not.
+        run.setMinimumSize(new Dimension(0, 0));
+        body = new javax.swing.JSplitPane(javax.swing.JSplitPane.HORIZONTAL_SPLIT, planning, run);
         body.setBackground(Theme.BACKGROUND);
         body.setBorder(null);
         body.setContinuousLayout(true);
@@ -147,13 +166,44 @@ public final class RunnerWindow implements ExperimentListener {
         // Extra width goes to the results side; the roster keeps whatever the operator dragged.
         body.setResizeWeight(0);
 
+        drawer.setBackground(Theme.BACKGROUND);
+        drawer.setBorder(javax.swing.BorderFactory.createMatteBorder(0, 0, 0, 1, Theme.LINE));
+        scrim =
+                new JPanel() {
+                    @Override
+                    protected void paintComponent(java.awt.Graphics g) {
+                        g.setColor(new Color(0, 0, 0, 110));
+                        g.fillRect(0, 0, getWidth(), getHeight());
+                    }
+                };
+        scrim.setOpaque(false);
+        scrim.addMouseListener(
+                new java.awt.event.MouseAdapter() {
+                    @Override
+                    public void mousePressed(java.awt.event.MouseEvent unused) {
+                        closeDrawer(true);
+                    }
+                });
+
+        centerHost.setBackground(Theme.BACKGROUND);
+        centerHost.add(body, BorderLayout.CENTER);
+
         frame.setLayout(new BorderLayout());
         frame.getContentPane().setBackground(Theme.BACKGROUND);
         frame.add(topBar(), BorderLayout.NORTH);
-        frame.add(body, BorderLayout.CENTER);
+        frame.add(centerHost, BorderLayout.CENTER);
         frame.setSize(1500, 900);
-        frame.setMinimumSize(new Dimension(900, 620));
+        // Small enough to live in whatever strip the game leaves free; below the collapse
+        // threshold the roster is a drawer, so the results keep the full width.
+        frame.setMinimumSize(new Dimension(560, 620));
         frame.setLocationByPlatform(true);
+        frame.addComponentListener(
+                new java.awt.event.ComponentAdapter() {
+                    @Override
+                    public void componentResized(java.awt.event.ComponentEvent unused) {
+                        updateResponsiveLayout();
+                    }
+                });
 
         // Closing is a stop, not an escape: a run left headless by accident would keep the machine
         // busy with no way to reach it.
@@ -190,6 +240,18 @@ public final class RunnerWindow implements ExperimentListener {
         stopButton.setEnabled(false);
         status.setForeground(Theme.MUTED);
 
+        hamburger.setToolTipText("Mod roster");
+        hamburger.setVisible(false);
+        hamburger.addActionListener(
+                unused -> {
+                    if (drawerShown) {
+                        closeDrawer(true);
+                    } else {
+                        openDrawer();
+                    }
+                });
+
+        bar.add(hamburger);
         bar.add(startButton);
         bar.add(stopButton);
         bar.add(Theme.separator());
@@ -200,6 +262,119 @@ public final class RunnerWindow implements ExperimentListener {
         bar.add(Theme.separator());
         bar.add(eta);
         return bar;
+    }
+
+    // --- responsive shell ---
+
+    /**
+     * Moves the roster between its two homes as the window crosses the threshold.
+     *
+     * <p>Wide: a split-pane sidebar, always visible, divider draggable. Narrow: the roster leaves
+     * the layout entirely — the results take the full width — and comes back as a drawer sliding
+     * over them from the hamburger. The same {@link PlanningView} instance moves between parents,
+     * so toggles, search state and per-arm status survive the crossing.
+     */
+    private void updateResponsiveLayout() {
+        boolean narrow = frame.getWidth() < COLLAPSE_THRESHOLD;
+        if (narrow == railCollapsed) {
+            if (drawerShown) {
+                layoutOverlay();
+            }
+            return;
+        }
+        railCollapsed = narrow;
+        hamburger.setVisible(narrow);
+        if (narrow) {
+            centerHost.remove(body);
+            drawer.add(planning, BorderLayout.CENTER);
+            centerHost.add(run, BorderLayout.CENTER);
+        } else {
+            closeDrawer(false);
+            drawer.remove(planning);
+            centerHost.remove(run);
+            body.setLeftComponent(planning);
+            body.setRightComponent(run);
+            centerHost.add(body, BorderLayout.CENTER);
+            body.setDividerLocation(Math.min(430, frame.getWidth() / 2));
+        }
+        centerHost.revalidate();
+        centerHost.repaint();
+    }
+
+    private void openDrawer() {
+        if (drawerShown) {
+            return;
+        }
+        drawerShown = true;
+        var layers = frame.getRootPane().getLayeredPane();
+        layoutOverlay();
+        drawer.setLocation(-drawer.getWidth(), drawer.getY());
+        layers.add(scrim, javax.swing.JLayeredPane.MODAL_LAYER);
+        layers.add(drawer, javax.swing.JLayeredPane.POPUP_LAYER);
+        layers.revalidate();
+        layers.repaint();
+        slideDrawerTo(0, null);
+    }
+
+    private void closeDrawer(boolean animated) {
+        if (!drawerShown) {
+            return;
+        }
+        drawerShown = false;
+        Runnable detach =
+                () -> {
+                    var layers = frame.getRootPane().getLayeredPane();
+                    layers.remove(scrim);
+                    layers.remove(drawer);
+                    layers.revalidate();
+                    layers.repaint();
+                };
+        if (animated) {
+            slideDrawerTo(-drawer.getWidth(), detach);
+        } else {
+            if (drawerAnimator != null) {
+                drawerAnimator.stop();
+            }
+            detach.run();
+        }
+    }
+
+    /** Overlay geometry, recomputed on open and on every resize while the drawer is out. */
+    private void layoutOverlay() {
+        var layers = frame.getRootPane().getLayeredPane();
+        int width = Math.min(DRAWER_WIDTH, Math.max(260, layers.getWidth() - 60));
+        scrim.setBounds(0, 0, layers.getWidth(), layers.getHeight());
+        drawer.setBounds(drawerAnimator != null && drawerAnimator.isRunning() ? drawer.getX() : 0,
+                0, width, layers.getHeight());
+    }
+
+    /** A short ease-out slide; the scrim just appears, the drawer does the moving. */
+    private void slideDrawerTo(int targetX, Runnable onDone) {
+        if (drawerAnimator != null) {
+            drawerAnimator.stop();
+        }
+        int fromX = drawer.getX();
+        long startedSliding = System.currentTimeMillis();
+        int duration = 140;
+        drawerAnimator = new Timer(10, null);
+        drawerAnimator.addActionListener(
+                unused -> {
+                    float linear =
+                            Math.min(
+                                    1f,
+                                    (System.currentTimeMillis() - startedSliding)
+                                            / (float) duration);
+                    float eased = 1 - (1 - linear) * (1 - linear);
+                    drawer.setLocation(
+                            Math.round(fromX + (targetX - fromX) * eased), drawer.getY());
+                    if (linear >= 1f) {
+                        drawerAnimator.stop();
+                        if (onDone != null) {
+                            onDone.run();
+                        }
+                    }
+                });
+        drawerAnimator.start();
     }
 
     private JPanel runView() {
@@ -349,6 +524,14 @@ public final class RunnerWindow implements ExperimentListener {
             frame.setBounds(screen.x, screen.y + gameBottom, screen.width, screen.height - gameBottom);
         }
         // A screen with room for neither keeps the window where the operator put it.
+
+        // The dock decides the width, so decide the layout for it now rather than waiting for
+        // the resize event: collapse to the drawer if the strip is narrow, and in split mode
+        // re-split at up to 430 but never past half the docked width, so both sides start usable.
+        updateResponsiveLayout();
+        if (!railCollapsed) {
+            body.setDividerLocation(Math.min(430, frame.getWidth() / 2));
+        }
     }
 
     private void confirmStop() {
