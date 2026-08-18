@@ -132,13 +132,20 @@ public final class RunnerWindow implements ExperimentListener {
     private void build() {
         // One layout, no view swap: the roster is the left sidebar in every state, so the next
         // run is planned while the last run's columns are still on screen, and Start re-arms once
-        // a run finishes.
-        planning.setPreferredSize(new Dimension(430, 0));
+        // a run finishes. The divider is draggable -- planning wants a wide roster, watching
+        // wants wide columns, and only the operator knows which they are doing.
+        planning.setMinimumSize(new Dimension(300, 0));
 
-        JPanel body = new JPanel(new BorderLayout(12, 0));
+        var body =
+                new javax.swing.JSplitPane(
+                        javax.swing.JSplitPane.HORIZONTAL_SPLIT, planning, runView());
         body.setBackground(Theme.BACKGROUND);
-        body.add(planning, BorderLayout.WEST);
-        body.add(runView(), BorderLayout.CENTER);
+        body.setBorder(null);
+        body.setContinuousLayout(true);
+        body.setDividerSize(8);
+        body.setDividerLocation(430);
+        // Extra width goes to the results side; the roster keeps whatever the operator dragged.
+        body.setResizeWeight(0);
 
         frame.setLayout(new BorderLayout());
         frame.getContentPane().setBackground(Theme.BACKGROUND);
