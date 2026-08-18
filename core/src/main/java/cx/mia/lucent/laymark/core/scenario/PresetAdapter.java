@@ -33,7 +33,8 @@ final class PresetAdapter implements JsonSerializer<Preset>, JsonDeserializer<Pr
                     "clouds",
                     "entityShadows",
                     "biomeBlendRadius",
-                    "fieldOfView");
+                    "fieldOfView",
+                    "options");
 
     @Override
     public Preset deserialize(JsonElement json, Type type, JsonDeserializationContext context) {
@@ -62,7 +63,40 @@ final class PresetAdapter implements JsonSerializer<Preset>, JsonDeserializer<Pr
                         ? object.get("entityShadows").getAsBoolean()
                         : defaults.entityShadows(),
                 integer(object, "biomeBlendRadius", defaults.biomeBlendRadius()),
-                integer(object, "fieldOfView", defaults.fieldOfView()));
+                integer(object, "fieldOfView", defaults.fieldOfView()),
+                object.has("options") ? options(object.get("options")) : java.util.Map.of());
+    }
+
+    /**
+     * The free-form escape hatch: namespace → key → value, values kept as the literal the
+     * operator wrote. Typing is the receiving option's job — its own codec parses the literal, so
+     * an unacceptable value fails there with the option named, not here with a shape complaint.
+     */
+    private static java.util.Map<String, java.util.Map<String, String>> options(JsonElement raw) {
+        if (!raw.isJsonObject()) {
+            throw new PlanException("settings.options must be an object of namespaces");
+        }
+        java.util.Map<String, java.util.Map<String, String>> parsed =
+                new java.util.LinkedHashMap<>();
+        for (String namespace : raw.getAsJsonObject().keySet()) {
+            JsonElement entries = raw.getAsJsonObject().get(namespace);
+            if (!entries.isJsonObject()) {
+                throw new PlanException(
+                        "settings.options." + namespace + " must be an object of key: value");
+            }
+            java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
+            for (String key : entries.getAsJsonObject().keySet()) {
+                JsonElement value = entries.getAsJsonObject().get(key);
+                if (!value.isJsonPrimitive()) {
+                    throw new PlanException(
+                            "settings.options." + namespace + "." + key
+                                    + " must be a string, number or boolean");
+                }
+                values.put(key, value.getAsString());
+            }
+            parsed.put(namespace, values);
+        }
+        return parsed;
     }
 
     private static int integer(JsonObject object, String field, int fallback) {
@@ -85,6 +119,17 @@ final class PresetAdapter implements JsonSerializer<Preset>, JsonDeserializer<Pr
         object.addProperty("entityShadows", src.entityShadows());
         object.addProperty("biomeBlendRadius", src.biomeBlendRadius());
         object.addProperty("fieldOfView", src.fieldOfView());
+        if (!src.options().isEmpty()) {
+            JsonObject namespaces = new JsonObject();
+            src.options()
+                    .forEach(
+                            (namespace, values) -> {
+                                JsonObject entries = new JsonObject();
+                                values.forEach(entries::addProperty);
+                                namespaces.add(namespace, entries);
+                            });
+            object.add("options", namespaces);
+        }
         return object;
     }
 }

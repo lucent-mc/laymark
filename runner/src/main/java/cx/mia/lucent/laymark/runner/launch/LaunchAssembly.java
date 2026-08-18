@@ -54,7 +54,8 @@ public final class LaunchAssembly {
             int port,
             String token,
             String runId,
-            String outputDirectory) {
+            String outputDirectory,
+            cx.mia.lucent.laymark.core.plan.WindowSize window) {
 
         if (token == null || token.isBlank()) {
             throw new LaunchException("a launch needs a handshake token");
@@ -105,9 +106,9 @@ public final class LaunchAssembly {
         // once the harness gets around to it. The preset still enforces the size afterwards; this
         // only spares the visible snap and the seconds spent under a size nobody asked for.
         argv.add("--width");
-        argv.add(String.valueOf(Laymark.WINDOW_WIDTH));
+        argv.add(String.valueOf(window.width()));
         argv.add("--height");
-        argv.add(String.valueOf(Laymark.WINDOW_HEIGHT));
+        argv.add(String.valueOf(window.height()));
         return List.copyOf(argv);
     }
 

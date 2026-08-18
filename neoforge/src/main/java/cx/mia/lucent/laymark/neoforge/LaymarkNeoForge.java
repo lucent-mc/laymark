@@ -4,6 +4,7 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.protocol.Frame;
 import cx.mia.lucent.laymark.core.protocol.HarnessClient;
 import cx.mia.lucent.laymark.core.protocol.ProtocolException;
+import cx.mia.lucent.laymark.core.scenario.ScenarioConfigFile;
 import cx.mia.lucent.laymark.minecraft.ClientChannels;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.common.NeoForge;
@@ -38,6 +39,7 @@ public final class LaymarkNeoForge {
 
     public LaymarkNeoForge(IEventBus modBus, ModContainer container) {
         String version = container.getModInfo().getVersion().toString();
+        ensureConfig();
 
         if (!HarnessClient.launchedByRunner()) {
             // A human started the game. Laymark measures nothing on its own, but it does the one
@@ -73,6 +75,20 @@ public final class LaymarkNeoForge {
                                     }
                                 },
                                 "laymark-shutdown"));
+    }
+
+    /** Creates the same commented config the runner creates, without ever replacing user edits. */
+    private static void ensureConfig() {
+        java.nio.file.Path gameDirectory = net.neoforged.fml.loading.FMLPaths.GAMEDIR.get();
+        try {
+            java.nio.file.Path config = ScenarioConfigFile.ensureExists(gameDirectory);
+            LOG.info("Laymark scenario config is at {}", config);
+        } catch (java.io.IOException e) {
+            // A human launch should still reach the title screen. A runner launch will fail with
+            // the same path when it attempts to read the required plan, but the early log retains
+            // the filesystem cause that made creation fail.
+            LOG.warn("Laymark could not create {}", ScenarioConfigFile.path(gameDirectory), e);
+        }
     }
 
     /**

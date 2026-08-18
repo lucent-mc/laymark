@@ -22,6 +22,14 @@ package cx.mia.lucent.laymark.core.harness;
  * @param simulationDistance chunks
  * @param fieldOfView degrees; pinned because it decides how much geometry is on screen
  */
+/*
+ * @param options everything beyond the enumerated fields, as namespace → key → value. The
+ *     "minecraft" namespace reaches any option in the game's own options registry by its
+ *     options.txt key — graphicsPreset, gamma, cutoutLeaves, whatever exists — parsed and applied
+ *     through the option's own codec, so an unknown key or unacceptable value fails instead of
+ *     silently running a different configuration. Other namespaces are for mods that expose
+ *     settings through a loader config API; they need a loader-side handler.
+ */
 public record Preset(
         int renderDistance,
         int simulationDistance,
@@ -29,7 +37,8 @@ public record Preset(
         CloudDetail clouds,
         boolean entityShadows,
         int biomeBlendRadius,
-        int fieldOfView) {
+        int fieldOfView,
+        java.util.Map<String, java.util.Map<String, String>> options) {
 
     /**
      * Vanilla's framerate slider treats its maximum as uncapped.
@@ -64,6 +73,14 @@ public record Preset(
         if (particles == null || clouds == null) {
             throw new HarnessException("preset has an unset enum field");
         }
+        java.util.Map<String, java.util.Map<String, String>> copied =
+                new java.util.LinkedHashMap<>();
+        if (options != null) {
+            options.forEach(
+                    (namespace, values) ->
+                            copied.put(namespace, java.util.Map.copyOf(values)));
+        }
+        options = java.util.Map.copyOf(copied);
     }
 
     private static void requireRange(String field, int value, int min, int max) {
@@ -86,6 +103,24 @@ public record Preset(
         difference(differences, "entityShadows", entityShadows, other.entityShadows);
         difference(differences, "biomeBlendRadius", biomeBlendRadius, other.biomeBlendRadius);
         difference(differences, "fieldOfView", fieldOfView, other.fieldOfView);
+        for (String namespace :
+                java.util.stream.Stream.concat(
+                                options.keySet().stream(), other.options.keySet().stream())
+                        .distinct()
+                        .toList()) {
+            var mine = options.getOrDefault(namespace, java.util.Map.of());
+            var theirs = other.options.getOrDefault(namespace, java.util.Map.of());
+            for (String key :
+                    java.util.stream.Stream.concat(mine.keySet().stream(), theirs.keySet().stream())
+                            .distinct()
+                            .toList()) {
+                difference(
+                        differences,
+                        namespace + ":" + key,
+                        mine.getOrDefault(key, "(unset)"),
+                        theirs.getOrDefault(key, "(unset)"));
+            }
+        }
         return java.util.List.copyOf(differences);
     }
 
@@ -105,6 +140,7 @@ public record Preset(
                 CloudDetail.FANCY,
                 true,
                 2,
-                70);
+                70,
+                java.util.Map.of());
     }
 }

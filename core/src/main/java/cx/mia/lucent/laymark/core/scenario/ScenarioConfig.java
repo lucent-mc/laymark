@@ -28,7 +28,10 @@ import java.util.Map;
  * @param scenarios in declaration order
  */
 public record ScenarioConfig(
-        int version, Map<String, Preset> settingsPresets, List<ScenarioDefinition> scenarios) {
+        int version,
+        cx.mia.lucent.laymark.core.plan.WindowSize window,
+        Map<String, Preset> settingsPresets,
+        List<ScenarioDefinition> scenarios) {
 
     /** Bumped only when an existing document would be read wrongly rather than merely partially. */
     public static final int SCHEMA_VERSION = 1;
@@ -39,6 +42,7 @@ public record ScenarioConfig(
                     "config schema version " + version + " is not supported; this build reads "
                             + SCHEMA_VERSION);
         }
+        window = window == null ? cx.mia.lucent.laymark.core.plan.WindowSize.DEFAULT : window;
         settingsPresets = settingsPresets == null ? Map.of() : Map.copyOf(settingsPresets);
         if (scenarios == null || scenarios.isEmpty()) {
             throw new PlanException("config declares no scenarios");
@@ -70,7 +74,7 @@ public record ScenarioConfig(
         for (ScenarioDefinition definition : scenarios) {
             resolved.add(definition.resolve(this::preset));
         }
-        return RunPlan.of(runId, outputDirectory, resolved);
+        return RunPlan.of(runId, outputDirectory, window, resolved);
     }
 
     /**
@@ -88,6 +92,6 @@ public record ScenarioConfig(
 
     /** A config with one scenario and no named presets, for tests and for a minimal invocation. */
     public static ScenarioConfig of(ScenarioDefinition... scenarios) {
-        return new ScenarioConfig(SCHEMA_VERSION, new LinkedHashMap<>(), List.of(scenarios));
+        return new ScenarioConfig(SCHEMA_VERSION, null, new LinkedHashMap<>(), List.of(scenarios));
     }
 }

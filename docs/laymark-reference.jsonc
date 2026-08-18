@@ -1,15 +1,24 @@
-// config/laymark.json — the complete reference.
+// config/laymark.jsonc — the complete reference.
 //
 // This file IS the plan: hand-authored, read by the runner for scheduling and by the in-game
-// harness for execution. Comments (// and /* */) are allowed and ignored. Unknown fields are
-// refused, loudly — a typo becomes an error, never a silently different run.
+// harness for execution. Comments (// and /* */) are allowed and ignored. Malformed JSON and
+// invalid values are reported instead of silently changing the run.
 //
-// Copy this next to your instance as config/laymark.json and delete what you don't need.
-// Every field marked (optional) has the default shown.
+// Both the runner and mod copy this exact file to config/laymark.jsonc when it is missing. Once
+// created, it is yours: Laymark never overwrites it. Every schema field and accepted named value
+// appears below. Every field marked (optional) has the default shown.
 {
   // Schema version. Bumped only when an existing document would be read WRONGLY,
   // not merely partially. Currently always 1.
   "version": 1,
+
+  // The game window, one size for the whole run: the game LAUNCHES at this size and
+  // the harness re-enforces it per scenario. Always windowed, pinned top-left so the
+  // runner can dock beside it. A stratum: two runs at different sizes are never
+  // comparable, and the framebuffer readback plus the cross-arm parity gate hold it
+  // within a run. Smaller = less GPU-bound, so CPU differences show more clearly.
+  // (optional; default 1600x900)
+  "window": { "width": 1600, "height": 900 },
 
   // Reusable settings bundles, referenced by name from a scenario's "settings".
   // Any field left out takes the default shown. (optional; default: no presets)
@@ -21,14 +30,38 @@
       "clouds": "FANCY",         // OFF | FAST | FANCY                 (default FANCY)
       "entityShadows": true,     //                                    (default true)
       "biomeBlendRadius": 2,     // 0..7                               (default 2)
-      "fieldOfView": 70          // degrees, 30..110                   (default 70)
+      "fieldOfView": 70,         // degrees, 30..110                   (default 70)
+
+      // Anything beyond the shorthand fields above, as namespace -> key -> value.
+      // The "minecraft" namespace reaches ANY option in the game's own registry by
+      // its options.txt key — the value is parsed by the option's own codec, so an
+      // unknown key or unacceptable value fails the run naming the option, instead
+      // of silently running a different configuration. Anything not set here stays
+      // at whatever the instance has. (optional; default: nothing)
+      "options": {
+        "minecraft": {
+          "graphicsPreset": "fancy"  // fast | fancy | fabulous | custom. Its own
+                                     // setting — it does NOT rewrite clouds or
+                                     // particles when set this way (that cascade only
+                                     // happens through the settings screen button).
+                                     // Vanilla flips it to "custom" whenever any
+                                     // member setting changes, which doubles as a
+                                     // free drift detector.
+          // "gamma": 0.5,           // any other options.txt key works the same way:
+          // "cutoutLeaves": true,   // parsed and applied through the game's own
+          // "entityDistanceScaling": 1.0  // option instance
+        }
+        // Other namespaces are reserved for mods that expose settings through a
+        // loader config API ("sodium": { ... }). They fail closed until a loader-side
+        // handler is wired — an option you configured and Laymark ignored would be a
+        // run measuring the wrong thing.
+      }
       // NOT configurable, by design — a config that could set these could censor its
       // own results:
       //   framerate limit   forced uncapped
       //   vsync             forced off
-      //   window            forced 1600x900 windowed, pinned top-left
-      //   graphics preset   (Fast/Fancy/Fabulous) resolves differently per GPU/OS,
-      //                     so only the enumerated settings above exist
+      //   window mode       always windowed at the run-level "window" size, pinned
+      //                     top-left; fullscreen is refused
     }
   },
 
@@ -40,7 +73,7 @@
       // Stable id. Results are keyed by it; dependsOn refers to it. Required.
       "id": "chunk-generation",
 
-      // What to capture. One name or a list. Nothing is measured implicitly. Required.
+      // What to capture. One name or a list. (optional; default: RESIDENT_RENDER)
       //   SPAWN_GENERATION      world creation through the join barrier. Its frame
       //                         channel sits under a vanilla 60fps menu cap (flagged,
       //                         expected); the signal is duration and work counters.
@@ -59,8 +92,8 @@
       // both phases in one repetition, in that order.
       "measure": "UNGENERATED_TRAVERSAL",
 
-      // When the capture ends — and therefore which number is the scored one. Required
-      // for completion phases; RESIDENT_RENDER defaults to 30s of TIME. (optional there)
+      // When the capture ends — and therefore which number is the scored one.
+      // (optional; default: 30s of TIME)
       "stop": {
         // TIME    target = milliseconds of capture. Same window in both arms; frame
         //         distributions compare directly. timeout optional (2x target).
@@ -88,9 +121,20 @@
       // A preset name from settingsPresets, or the settings object written inline.
       // One field, two spellings — never both. (optional; all defaults)
       "settings": "example",
+      // Inline spelling (replace the line above with this object):
+      // "settings": {
+      //   "renderDistance": 12,
+      //   "simulationDistance": 12,
+      //   "particles": "ALL",
+      //   "clouds": "FANCY",
+      //   "entityShadows": true,
+      //   "biomeBlendRadius": 2,
+      //   "fieldOfView": 70
+      // },
 
-      // Where the player stands and looks. pitch 90 = straight down. (optional;
-      // default 0.5/200/0.5 looking down)
+      // Where the player stands and looks. Coordinates and rotations must be finite;
+      // pitch is -90..90 and 90 = straight down. Yaw is in degrees and may wrap.
+      // (optional; default 0.5/200/0.5, yaw 0, pitch 90)
       // TRAP: chunk (0,0) is spawn, which world creation always generates — an
       // UNGENERATED_TRAVERSAL pose near spawn hard-fails its precondition. Keep
       // generation targets tens of thousands of blocks out.
@@ -104,7 +148,8 @@
 
       // Scene geometry placed before the barrier, in order. Sponge Schematic v3
       // (.schem — WorldEdit/FAWE/Litematica export). Paths are relative to this
-      // config file; absolute paths and .. are refused. (optional, none)
+      // config file; absolute paths and .. are refused. originX/Y/Z are the block
+      // coordinates where the schematic's own origin is placed. (optional, none)
       "content": [
         // { "schematic": "scenes/pen.schem", "originX": 32760, "originY": 200, "originZ": 32760 }
       ],
@@ -138,5 +183,5 @@
 // For Inlay users — keep Laymark's files out of your layer via .layignore:
 //   laymark-runner-*.jar
 //   .laymark/
-//   config/laymark.json
+//   config/laymark.jsonc
 //   config/laymark-dependencies.json

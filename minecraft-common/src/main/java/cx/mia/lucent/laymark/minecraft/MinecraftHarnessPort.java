@@ -74,15 +74,24 @@ public final class MinecraftHarnessPort implements HarnessPort {
     /** The save this run created, remembered so disk-level questions can be asked about it. */
     private volatile String currentLevelId;
 
+    /** The run's window size, a stratum carried on the plan; the preset re-enforces it. */
+    private final cx.mia.lucent.laymark.core.plan.WindowSize window;
+
     public MinecraftHarnessPort(ClientChannels channels) {
+        this(channels, cx.mia.lucent.laymark.core.plan.WindowSize.DEFAULT);
+    }
+
+    public MinecraftHarnessPort(
+            ClientChannels channels, cx.mia.lucent.laymark.core.plan.WindowSize window) {
         this.recorder = channels.frames();
         this.gpuTimer = channels.gpu();
         this.spark = channels.spark();
+        this.window = window;
     }
 
     @Override
     public void applyPreset(Preset preset) {
-        ClientThread.run("applying the preset", () -> PresetOptions.apply(preset));
+        ClientThread.run("applying the preset", () -> PresetOptions.apply(preset, window));
     }
 
     @Override

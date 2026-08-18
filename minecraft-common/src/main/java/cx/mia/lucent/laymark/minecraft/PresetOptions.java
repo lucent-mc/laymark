@@ -28,11 +28,6 @@ public final class PresetOptions {
 
     private PresetOptions() {}
 
-    /** Fixed and non-configurable; see the window note in {@link #apply}. */
-    private static final int WINDOW_WIDTH = cx.mia.lucent.laymark.core.Laymark.WINDOW_WIDTH;
-
-    private static final int WINDOW_HEIGHT = cx.mia.lucent.laymark.core.Laymark.WINDOW_HEIGHT;
-
     /** Clear of the top edge so the title bar stays grabbable. */
     private static final int WINDOW_X = 0;
 
@@ -47,7 +42,7 @@ public final class PresetOptions {
      *
      * <p>Also disables the two vanilla behaviours that silently sabotage an unattended run.
      */
-    public static void apply(Preset preset) {
+    public static void apply(Preset preset, cx.mia.lucent.laymark.core.plan.WindowSize window) {
         Minecraft minecraft = Minecraft.getInstance();
         Options options = minecraft.options;
 
@@ -63,11 +58,28 @@ public final class PresetOptions {
         set(options.biomeBlendRadius(), preset.biomeBlendRadius(), "biomeBlendRadius");
         set(options.fov(), preset.fieldOfView(), "fieldOfView");
 
-        // Windowed at a fixed size. A smaller window is less GPU-bound, so CPU-side differences
-        // show more clearly -- and a window that varied with whatever the instance last used would
-        // make two machines, or two runs, incomparable for a reason nobody recorded.
+        // The free-form namespaces, after the enumerated fields so an explicit
+        // minecraft:renderDistance-style entry wins over the shorthand. The "minecraft" namespace
+        // reaches any option in the game's own registry; other namespaces need a loader-side
+        // handler and fail closed until one exists, because an option someone configured and
+        // Laymark ignored is a run measuring the wrong thing.
+        for (var namespace : preset.options().entrySet()) {
+            if (!"minecraft".equals(namespace.getKey())) {
+                throw new cx.mia.lucent.laymark.core.harness.HarnessException(
+                        "options namespace '" + namespace.getKey() + "' has no handler yet; only"
+                                + " 'minecraft' is wired");
+            }
+            for (var entry : namespace.getValue().entrySet()) {
+                GenericOptions.set(options, entry.getKey(), entry.getValue());
+            }
+        }
+
+        // Windowed at the run's size. A window that varied with whatever the instance last used
+        // would make two machines, or two runs, incomparable for a reason nobody recorded -- so
+        // the size is a stratum on the plan, and the framebuffer readback plus the cross-arm
+        // parity gate hold it within a run.
         options.fullscreen().set(false);
-        Minecraft.getInstance().getWindow().setWindowed(WINDOW_WIDTH, WINDOW_HEIGHT);
+        Minecraft.getInstance().getWindow().setWindowed(window.width(), window.height());
         // Pinned to the top-left corner, not just to a size. A deterministic position lets the
         // runner's own window dock beside the game instead of underneath it, and where the window
         // sits is as much session state as how big it is.
@@ -98,6 +110,23 @@ public final class PresetOptions {
         Options options = minecraft.options;
         var window = minecraft.getWindow();
 
+        // Free-form options read back through each option's own codec, so the comparison is
+        // literal-to-literal in one canonical form. A key the registry cannot read is echoed as
+        // requested, like vsync -- unverifiable is not the same as deviated.
+        java.util.Map<String, java.util.Map<String, String>> effectiveOptions =
+                new java.util.LinkedHashMap<>();
+        for (var namespace : requested.options().entrySet()) {
+            java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
+            for (var entry : namespace.getValue().entrySet()) {
+                if ("minecraft".equals(namespace.getKey())) {
+                    values.put(entry.getKey(), GenericOptions.read(options, entry.getKey()));
+                } else {
+                    values.put(entry.getKey(), entry.getValue());
+                }
+            }
+            effectiveOptions.put(namespace.getKey(), values);
+        }
+
         Preset effective =
                 new Preset(
                         options.getEffectiveRenderDistance(),
@@ -106,7 +135,8 @@ public final class PresetOptions {
                         cloudDetail(options.cloudStatus().get()),
                         options.entityShadows().get(),
                         options.biomeBlendRadius().get(),
-                        options.fov().get());
+                        options.fov().get(),
+                        effectiveOptions);
 
         return new PresetReadback(
                 effective,

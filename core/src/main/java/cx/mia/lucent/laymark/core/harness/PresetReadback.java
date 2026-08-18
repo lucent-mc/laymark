@@ -50,6 +50,20 @@ public record PresetReadback(
         compare(deviations, "biomeBlendRadius", requested.biomeBlendRadius(),
                 effective.biomeBlendRadius());
         compare(deviations, "fieldOfView", requested.fieldOfView(), effective.fieldOfView());
+        // Free-form options: every requested key is compared against what the game reports for
+        // it. Keys with no effective accessor are echoed back as asked and compare clean, exactly
+        // like vsync.
+        for (var namespace : requested.options().entrySet()) {
+            var effectiveValues =
+                    effective.options().getOrDefault(namespace.getKey(), java.util.Map.of());
+            for (var entry : namespace.getValue().entrySet()) {
+                compare(
+                        deviations,
+                        namespace.getKey() + ":" + entry.getKey(),
+                        entry.getValue(),
+                        effectiveValues.getOrDefault(entry.getKey(), "(unreadable)"));
+            }
+        }
         return List.copyOf(deviations);
     }
 

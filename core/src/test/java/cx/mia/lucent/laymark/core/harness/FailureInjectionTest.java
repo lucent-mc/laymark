@@ -68,7 +68,8 @@ class FailureInjectionTest {
                                     requested.clouds(),
                                     requested.entityShadows(),
                                     requested.biomeBlendRadius(),
-                                    requested.fieldOfView())
+                                    requested.fieldOfView(),
+                                    java.util.Map.of())
                             : applied;
             return new PresetReadback(effective, 1600, 900, false);
         }
@@ -294,7 +295,8 @@ class FailureInjectionTest {
                         defaults.clouds(),
                         defaults.entityShadows(),
                         defaults.biomeBlendRadius(),
-                        defaults.fieldOfView());
+                        defaults.fieldOfView(),
+                        java.util.Map.of());
         var mismatches =
                 Parity.compare(
                         "render",

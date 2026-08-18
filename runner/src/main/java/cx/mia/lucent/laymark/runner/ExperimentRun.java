@@ -96,6 +96,7 @@ public final class ExperimentRun {
                         new RunPlan(
                                 plan.runId(),
                                 plan.protocolVersion(),
+                                plan.window(),
                                 plan.scenarios(),
                                 armOutput.toString());
                 RunResult result;

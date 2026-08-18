@@ -142,18 +142,19 @@ Verified end to end with the full modded pack, through world creation and entry.
 ```text
 <instance>/
   laymark-runner-<version>.jar   the runner itself, double-clickable
-  config/laymark.json            the scenario config: hand-authored, THE plan
+  config/laymark.jsonc           the scenario config: hand-authored, THE plan
   mods/              participants only: the baseline floor and all candidates
   .laymark/          Laymark's working state: withheld mods, staged scenes, results
 ```
 
-**`config/laymark.json` is the single source of what a run measures**, and it is hand-authored —
-the runner never writes it. Runner and harness resolve the same document (the runner for
-scheduling and timeouts, the harness for execution), so there is no separate plan file to drift
-from it; the run id and output directory, the only run-shaped facts the config cannot carry, pass
-on the launch command line, and the fully resolved plan is archived beside the results. Everything
-Laymark produces or caches lives under **`.laymark/`**, dot-prefixed so launchers, pack tooling and
-Inlay all read it as internal state rather than authored content.
+**`config/laymark.jsonc` is the single source of what a run measures**, and it is hand-authored.
+The runner and mod each create it from the complete commented reference when it is absent; after
+that neither overwrites it. Runner and harness resolve the same document (the runner for scheduling
+and timeouts, the harness for execution), so there is no separate plan file to drift from it; the
+run id and output directory, the only run-shaped facts the config cannot carry, pass on the launch
+command line, and the fully resolved plan is archived beside the results. Everything Laymark
+produces or caches lives under **`.laymark/`**, dot-prefixed so launchers, pack tooling and Inlay all
+read it as internal state rather than authored content.
 
 The runner sits at the **instance root**. It is the file someone opens, and the first place they
 look for it is the folder they already have open.
@@ -174,7 +175,7 @@ look for it is the folder they already have open.
   ```text
   laymark-runner-*.jar
   .laymark/
-  config/laymark.json
+  config/laymark.jsonc
   config/laymark-dependencies.json
   ```
 
@@ -240,7 +241,7 @@ constructs — so port discovery and the startup race both disappear.
 - The **launch facts** are `-Dlaymark.*` system properties — port, token, run id, output directory
   — which cannot be stale the way a leftover run file could. The mod defines the contract; the
   runner satisfies it.
-- The **scenarios come from `config/laymark.json`** (§5.3), which both sides resolve; the resolved
+- The **scenarios come from `config/laymark.jsonc`** (§5.3), which both sides resolve; the resolved
   plan is archived beside the results, never written into the instance.
 
 Bind `127.0.0.1` explicitly rather than `0.0.0.0` to avoid the Windows Firewall prompt.

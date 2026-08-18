@@ -3,6 +3,7 @@ package cx.mia.lucent.laymark.runner.gui;
 import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.experiment.Schedule;
 import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
+import cx.mia.lucent.laymark.core.scenario.ScenarioConfigFile;
 import cx.mia.lucent.laymark.core.select.DependencyGraph;
 import cx.mia.lucent.laymark.runner.select.JarProbe;
 import cx.mia.lucent.laymark.runner.launch.InstalledVersion;
@@ -148,12 +149,6 @@ public final class PlanningView extends JPanel {
         add(instanceCard(), BorderLayout.NORTH);
         add(candidatesCard(), BorderLayout.CENTER);
 
-        profiles.addActionListener(
-                unused -> {
-                    recallVersion();
-                    refreshConfigStatus();
-                    reloadMods();
-                });
         for (String profile : directories(root.resolve("profiles"))) {
             profiles.addItem(profile);
         }
@@ -164,6 +159,15 @@ public final class PlanningView extends JPanel {
         if (hereProfile != null) {
             profiles.setSelectedItem(hereProfile);
         }
+        // Attach only after population. JComboBox selects its first added item, and treating that
+        // transient selection as deliberate would create configs in an unrelated profile before
+        // selecting the instance the runner is actually sitting in.
+        profiles.addActionListener(
+                unused -> {
+                    recallVersion();
+                    refreshConfigStatus();
+                    reloadMods();
+                });
         versions.addActionListener(unused -> rememberVersion());
         recallVersion();
         refreshConfigStatus();
@@ -235,29 +239,13 @@ public final class PlanningView extends JPanel {
 
     /** Opens the config in whatever edits JSON here; the file is the interface, not this window. */
     private void editConfig() {
-        Path path = configPath();
         try {
-            if (!Files.isRegularFile(path)) {
-                Files.createDirectories(path.getParent());
-                // The commented reference, not an empty stub: comments parse (the codec reads
-                // JSONC), so the first thing the editor shows is the schema explaining itself.
-                try (var reference =
-                        PlanningView.class.getResourceAsStream("/laymark-reference.jsonc")) {
-                    if (reference != null) {
-                        Files.copy(reference, path);
-                    } else {
-                        Files.writeString(
-                                path,
-                                "{\n  \"version\": 1,\n  \"settingsPresets\": {},\n  \"scenarios\": []\n}\n",
-                                StandardCharsets.UTF_8);
-                    }
-                }
-            }
+            Path path = ScenarioConfigFile.ensureExists(gameDirectory());
             java.awt.Desktop.getDesktop().open(path.toFile());
         } catch (java.io.IOException | RuntimeException e) {
             javax.swing.JOptionPane.showMessageDialog(
                     this,
-                    "Could not open " + path + ": " + e.getMessage(),
+                    "Could not open " + configPath() + ": " + e.getMessage(),
                     "Edit config",
                     javax.swing.JOptionPane.ERROR_MESSAGE);
         }
@@ -266,10 +254,9 @@ public final class PlanningView extends JPanel {
     /**
      * Reads the instance's own config and says what it holds.
      *
-     * <p>Not a file picker. {@code config/laymark.json} is the single source of what a run measures
+     * <p>Not a file picker. {@code config/laymark.jsonc} is the single source of what a run measures
      * — the harness reads it from inside the game — so the planner reports on it rather than
-     * offering to point somewhere the harness will not look. Laymark ships no scenarios; what is
-     * worth measuring is a property of the pack and of whoever is tuning it.
+     * offering to point somewhere the harness will not look.
      */
     private void refreshConfigStatus() {
         String profile = (String) profiles.getSelectedItem();
@@ -277,13 +264,8 @@ public final class PlanningView extends JPanel {
             configStatus.setText("—");
             return;
         }
-        Path path = configPath();
-        if (!Files.isRegularFile(path)) {
-            configStatus.setForeground(Theme.BAD);
-            configStatus.setText(Laymark.CONFIG_PATH + " is missing — write your scenarios there");
-            return;
-        }
         try {
+            Path path = ScenarioConfigFile.ensureExists(gameDirectory());
             var scenarios =
                     ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8)).scenarios();
             configStatus.setForeground(Theme.MUTED);
@@ -295,7 +277,7 @@ public final class PlanningView extends JPanel {
                                     .orElse(""));
         } catch (RuntimeException | java.io.IOException e) {
             configStatus.setForeground(Theme.BAD);
-            configStatus.setText(Laymark.CONFIG_PATH + " does not parse: " + e.getMessage());
+            configStatus.setText(Laymark.CONFIG_PATH + " could not be read: " + e.getMessage());
         }
     }
 
@@ -946,10 +928,13 @@ public final class PlanningView extends JPanel {
 
     /** The selected profile's own config; the only place scenarios come from. */
     private Path configPath() {
+        return ScenarioConfigFile.path(gameDirectory());
+    }
+
+    private Path gameDirectory() {
         String profile = (String) profiles.getSelectedItem();
         return root.resolve("profiles")
-                .resolve(profile == null ? "" : profile)
-                .resolve(Laymark.CONFIG_PATH);
+                .resolve(profile == null ? "" : profile);
     }
 
     /** Why {@link #choice()} returned nothing, phrased for whoever is looking at the form. */

@@ -78,7 +78,7 @@ public final class Harness {
             }
 
             RunPlan plan = readPlan();
-            MinecraftHarnessPort port = new MinecraftHarnessPort(channels);
+            MinecraftHarnessPort port = new MinecraftHarnessPort(channels, plan.window());
 
             // Liveness, decoupled from progress: a 30-minute capture emits no progress frames,
             // and without this it is indistinguishable from a hang until the full run timeout
@@ -162,7 +162,7 @@ public final class Harness {
     /**
      * Resolves the hand-authored config into this launch's plan.
      *
-     * <p>{@code config/laymark.json} is the single source of what a run measures; the runner reads
+     * <p>{@code config/laymark.jsonc} is the single source of what a run measures; the runner reads
      * the same file, so the two sides cannot drift. The only run-shaped facts the config cannot
      * carry — which run this is and where its results go — arrive as system properties on the
      * command line the runner assembled.
