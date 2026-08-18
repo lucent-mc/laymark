@@ -28,6 +28,20 @@ public final class PresetOptions {
 
     private PresetOptions() {}
 
+    /**
+     * The mandatory overrides, refused even through the free-form namespace. Each one either
+     * clamps frame time to something other than the work being measured, changes the window out
+     * from under the run, or re-labels settings Laymark pins individually.
+     */
+    private static final java.util.Set<String> FORCED_KEYS =
+            java.util.Set.of(
+                    "framerateLimit",
+                    "enableVsync",
+                    "fullscreen",
+                    "exclusiveFullscreen",
+                    "inactivityFpsLimit",
+                    "graphicsPreset");
+
     /** Clear of the top edge so the title bar stays grabbable. */
     private static final int WINDOW_X = 0;
 
@@ -70,9 +84,21 @@ public final class PresetOptions {
                                 + " 'minecraft' is wired");
             }
             for (var entry : namespace.getValue().entrySet()) {
+                if (FORCED_KEYS.contains(entry.getKey())) {
+                    throw new cx.mia.lucent.laymark.core.harness.HarnessException(
+                            "'" + entry.getKey() + "' is a mandatory override and cannot be"
+                                    + " configured; a config that could set it could censor its"
+                                    + " own results");
+                }
                 GenericOptions.set(options, entry.getKey(), entry.getValue());
             }
         }
+
+        // The graphics preset is forced to CUSTOM, last, after every setting it summarises.
+        // Fast/Fancy/Fabulous is a label over member settings that Laymark pins individually --
+        // and vanilla flips the label to CUSTOM whenever any member changes anyway, so CUSTOM is
+        // the only honest value and any drift away from it means a mod moved a member setting.
+        set(options.graphicsPreset(), net.minecraft.client.GraphicsPreset.CUSTOM, "graphicsPreset");
 
         // Windowed at the run's size. A window that varied with whatever the instance last used
         // would make two machines, or two runs, incomparable for a reason nobody recorded -- so

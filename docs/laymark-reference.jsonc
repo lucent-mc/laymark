@@ -40,16 +40,9 @@
       // at whatever the instance has. (optional; default: nothing)
       "options": {
         "minecraft": {
-          "graphicsPreset": "fancy"  // fast | fancy | fabulous | custom. Its own
-                                     // setting — it does NOT rewrite clouds or
-                                     // particles when set this way (that cascade only
-                                     // happens through the settings screen button).
-                                     // Vanilla flips it to "custom" whenever any
-                                     // member setting changes, which doubles as a
-                                     // free drift detector.
-          // "gamma": 0.5,           // any other options.txt key works the same way:
-          // "cutoutLeaves": true,   // parsed and applied through the game's own
-          // "entityDistanceScaling": 1.0  // option instance
+          "gamma": 0.5              // any options.txt key works this way: parsed and
+          // "cutoutLeaves": true,  // applied through the game's own option instance,
+          // "entityDistanceScaling": 1.0  // so an unknown key or bad value fails loudly
         }
         // Other namespaces are reserved for mods that expose settings through a
         // loader config API ("sodium": { ... }). They fail closed until a loader-side
@@ -57,11 +50,14 @@
         // run measuring the wrong thing.
       }
       // NOT configurable, by design — a config that could set these could censor its
-      // own results:
+      // own results, and they are refused even through "options":
       //   framerate limit   forced uncapped
       //   vsync             forced off
       //   window mode       always windowed at the run-level "window" size, pinned
       //                     top-left; fullscreen is refused
+      //   graphics preset   forced to "custom" — fast/fancy/fabulous is a label over
+      //                     member settings Laymark pins individually, and any drift
+      //                     away from "custom" means a mod moved one of them
     }
   },
 

@@ -25,8 +25,10 @@ class ScenarioConfigFileTest {
 
         assertEquals(instance.resolve(Laymark.CONFIG_PATH), written);
         String contents = Files.readString(written, StandardCharsets.UTF_8);
-        assertTrue(contents.startsWith("// config/laymark.jsonc — the complete reference."));
-        assertTrue(contents.contains("Every field marked (optional) has the default shown."));
+        // The intro is the operator's prose and changes at their whim; what the test holds is
+        // that the file opens with commentary, is the complete reference rather than a stub, and
+        // parses. Pinning intro sentences here made editing the intro break the build.
+        assertTrue(contents.startsWith("//"), "the reference opens with its commentary");
         assertTrue(contents.length() > 5_000, "the complete reference, not an empty config stub");
         assertEquals(2, ConfigCodec.read(contents).scenarios().size());
     }
