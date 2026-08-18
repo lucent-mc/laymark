@@ -48,14 +48,27 @@ public interface ExperimentListener {
     default void runFinished(int sequence, Arm arm, double scoredMillis, boolean failed) {}
 
     /**
-     * A candidate's standing while the round is still running: mean percent versus the baseline
-     * arms measured so far, positive is faster.
+     * A candidate's standing while the round is still running, every channel included: the
+     * aggregate of all this candidate's measured arms so far against the baseline arms measured so
+     * far. Positive percent is faster.
      *
-     * <p>A point estimate with no interval and no band — preliminary by name and by nature. It
-     * exists because the alternative shown mid-round was a raw millisecond average, which reads
-     * as a result while meaning nothing. The round's close replaces it with the real comparison.
+     * <p>Point estimates with no interval and no band — preliminary by name and by nature. They
+     * exist because the alternative shown mid-round was one opaque percentage, which reads as a
+     * result while saying nothing about where it came from. The round's close replaces this with
+     * the real comparison.
+     *
+     * @param msptDelta candidate-mean minus baseline-mean, null where a channel had no data yet
+     * @param scenarioPercents per-scenario improvement so far, by scenario id
      */
-    default void preliminaryScore(String id, double improvementPercent) {}
+    record Preliminary(
+            String id,
+            double improvementPercent,
+            Double msptDelta,
+            Double fpsDelta,
+            Double msPerChunkDelta,
+            java.util.Map<String, Double> scenarioPercents) {}
+
+    default void preliminaryScore(Preliminary preliminary) {}
 
     /**
      * One candidate's round in summary: the score a card leads with, the metric deltas beneath it,

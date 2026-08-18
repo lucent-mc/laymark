@@ -106,7 +106,7 @@ public final class RunnerWindow implements ExperimentListener {
     private final JTextArea log = new JTextArea();
 
     private Map<String, String> displayNames = Map.of();
-    private final Map<String, Double> liveScores = new LinkedHashMap<>();
+    private final Map<String, ExperimentListener.Preliminary> liveScores = new LinkedHashMap<>();
     private JPanel liveColumn;
     private JPanel liveRows;
     private String baselineLabel = "baseline";
@@ -794,12 +794,13 @@ public final class RunnerWindow implements ExperimentListener {
     }
 
     @Override
-    public void preliminaryScore(String id, double improvementPercent) {
-        // A percent against the baseline measured so far -- a raw millisecond figure mid-round
-        // read as a result while meaning nothing. Preliminary by name until the round closes.
+    public void preliminaryScore(ExperimentListener.Preliminary preliminary) {
+        // The full running aggregate against the baseline measured so far -- one opaque percent
+        // mid-round read as a result while saying nothing about where it came from. Still
+        // preliminary by name until the round closes and the real comparison replaces it.
         SwingUtilities.invokeLater(
                 () -> {
-                    liveScores.put(id, improvementPercent);
+                    liveScores.put(preliminary.id(), preliminary);
                     renderLiveColumn();
                     refresh();
                 });
@@ -975,19 +976,111 @@ public final class RunnerWindow implements ExperimentListener {
         }
         liveRows.removeAll();
         int[] rank = {0};
-        liveScores.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+        liveScores.values().stream()
+                .sorted(
+                        java.util.Comparator.comparingDouble(
+                                        ExperimentListener.Preliminary::improvementPercent)
+                                .reversed())
+                .forEach(preliminary -> liveRows.add(preliminaryCard(++rank[0], preliminary)));
+    }
+
+    /**
+     * A candidate's running aggregate mid-round: the same grid the finished card will carry, from
+     * every arm of this candidate measured so far, suffixed "so far" because none of it has an
+     * interval yet.
+     */
+    private JPanel preliminaryCard(int rank, ExperimentListener.Preliminary preliminary) {
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(Theme.RAISED);
+        card.setBorder(
+                javax.swing.BorderFactory.createCompoundBorder(
+                        new Theme.RoundedBorder(Theme.LINE, 8),
+                        javax.swing.BorderFactory.createEmptyBorder(8, 10, 8, 10)));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel headline = new JPanel(new BorderLayout(8, 0));
+        headline.setOpaque(false);
+        JLabel name = new JLabel(rank + ".  " + display(preliminary.id()));
+        name.setForeground(Theme.TEXT);
+        name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
+        double percent = preliminary.improvementPercent();
+        JLabel scoreLabel =
+                Theme.mono(
+                        String.format(Locale.ROOT, "%+.1f%%  so far", percent),
+                        percent > 0 ? Theme.GOOD : percent < 0 ? Theme.BAD : Theme.MUTED);
+        headline.add(name, BorderLayout.WEST);
+        headline.add(scoreLabel, BorderLayout.EAST);
+        card.add(headline);
+        card.add(preliminaryGrid(preliminary));
+
+        JPanel spacer = new JPanel(new BorderLayout());
+        spacer.setOpaque(false);
+        spacer.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 6, 0));
+        spacer.add(card, BorderLayout.CENTER);
+        spacer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        spacer.setMaximumSize(new Dimension(Integer.MAX_VALUE, spacer.getPreferredSize().height));
+        return spacer;
+    }
+
+    /** The finished card's grid shape, fed from the running aggregates. */
+    private JPanel preliminaryGrid(ExperimentListener.Preliminary preliminary) {
+        record Column(String header, String tooltip, String value, Color colour) {}
+        List<Column> gridColumns = new ArrayList<>();
+        String soFar = ", aggregated over this candidate's arms so far; no interval yet";
+        if (preliminary.msptDelta() != null) {
+            gridColumns.add(
+                    new Column(
+                            "mspt",
+                            "server mean tick time, delta vs baseline" + soFar,
+                            String.format(Locale.ROOT, "%+.1f", preliminary.msptDelta()),
+                            direction(preliminary.msptDelta(), true)));
+        }
+        if (preliminary.fpsDelta() != null) {
+            gridColumns.add(
+                    new Column(
+                            "fps",
+                            "mean framerate, delta vs baseline" + soFar,
+                            String.format(Locale.ROOT, "%+.0f", preliminary.fpsDelta()),
+                            direction(preliminary.fpsDelta(), false)));
+        }
+        if (preliminary.msPerChunkDelta() != null) {
+            gridColumns.add(
+                    new Column(
+                            "ms/ch",
+                            "time per chunk received, delta vs baseline" + soFar,
+                            String.format(Locale.ROOT, "%+.2f", preliminary.msPerChunkDelta()),
+                            direction(preliminary.msPerChunkDelta(), true)));
+        }
+        preliminary
+                .scenarioPercents()
                 .forEach(
-                        entry ->
-                                liveRows.add(
-                                        resultRow(
-                                                ++rank[0],
-                                                display(entry.getKey()),
+                        (scenarioId, scenarioPercent) ->
+                                gridColumns.add(
+                                        new Column(
+                                                abbreviate(scenarioId),
+                                                scenarioId
+                                                        + ": scored improvement vs baseline"
+                                                        + soFar,
                                                 String.format(
-                                                        Locale.ROOT,
-                                                        "%+.1f%%  so far",
-                                                        entry.getValue()),
-                                                false)));
+                                                        Locale.ROOT, "%+.1f%%", scenarioPercent),
+                                                direction(scenarioPercent, false))));
+
+        JPanel grid = new JPanel(new java.awt.GridLayout(2, gridColumns.size(), 12, 0));
+        grid.setOpaque(false);
+        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
+        for (Column column : gridColumns) {
+            JLabel header = Theme.small(column.header());
+            header.setToolTipText(column.tooltip());
+            grid.add(header);
+        }
+        for (Column column : gridColumns) {
+            JLabel value = Theme.mono(column.value(), column.colour());
+            value.setToolTipText(column.tooltip());
+            grid.add(value);
+        }
+        grid.setMaximumSize(grid.getPreferredSize());
+        return grid;
     }
 
     /**

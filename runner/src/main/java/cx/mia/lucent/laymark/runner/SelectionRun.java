@@ -262,9 +262,10 @@ public final class SelectionRun {
                     listener.runFinished(
                             sequence, arm, counted == 0 ? 0 : total / counted, counted == 0);
                     if (arm.kind() == Arm.Kind.CANDIDATE) {
-                        Double preliminary = preliminaryPercent(arm.id(), measured);
+                        ExperimentListener.Preliminary preliminary =
+                                preliminary(arm.id(), measured);
                         if (preliminary != null) {
-                            listener.preliminaryScore(arm.id(), preliminary);
+                            listener.preliminaryScore(preliminary);
                         }
                     }
                     sequence++;
@@ -528,36 +529,54 @@ public final class SelectionRun {
     }
 
     /**
-     * The candidate's mean percent versus this round's baseline runs so far; null before any
-     * baseline has been measured. Positive is faster, matching how improvements read everywhere
-     * else.
+     * The candidate's running aggregate versus this round's baseline arms so far — the scored
+     * percent per scenario plus every metric channel — from all of the candidate's measured arms,
+     * however many have run. Null before any baseline has been measured. Positive percent is
+     * faster, matching how improvements read everywhere else.
      */
-    private static Double preliminaryPercent(String armId, List<Measured> measured) {
-        List<Double> percents = new ArrayList<>();
+    private static ExperimentListener.Preliminary preliminary(
+            String armId, List<Measured> measured) {
+        List<Measured> own = measured.stream().filter(m -> m.armId().equals(armId)).toList();
+        List<Measured> baseline =
+                measured.stream().filter(m -> m.armId().equals("baseline")).toList();
+
+        Map<String, Double> scenarioPercents = new LinkedHashMap<>();
         for (String scenarioId :
-                measured.stream().map(Measured::scenarioId).distinct().toList()) {
-            double[] baseline =
-                    measured.stream()
-                            .filter(m -> m.armId().equals("baseline"))
+                measured.stream().map(Measured::scenarioId).distinct().sorted().toList()) {
+            double[] baselineMillis =
+                    baseline.stream()
                             .filter(m -> m.scenarioId().equals(scenarioId))
                             .mapToDouble(Measured::scoredMillis)
                             .toArray();
-            double[] own =
-                    measured.stream()
-                            .filter(m -> m.armId().equals(armId))
+            double[] ownMillis =
+                    own.stream()
                             .filter(m -> m.scenarioId().equals(scenarioId))
                             .mapToDouble(Measured::scoredMillis)
                             .toArray();
-            if (baseline.length == 0 || own.length == 0) {
+            if (baselineMillis.length == 0 || ownMillis.length == 0) {
                 continue;
             }
-            double baselineMean = java.util.Arrays.stream(baseline).average().orElseThrow();
-            double ownMean = java.util.Arrays.stream(own).average().orElseThrow();
-            percents.add((baselineMean - ownMean) / baselineMean * 100.0);
+            double baselineMean =
+                    java.util.Arrays.stream(baselineMillis).average().orElseThrow();
+            double ownMean = java.util.Arrays.stream(ownMillis).average().orElseThrow();
+            scenarioPercents.put(scenarioId, (baselineMean - ownMean) / baselineMean * 100.0);
         }
-        return percents.isEmpty()
-                ? null
-                : percents.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
+        if (scenarioPercents.isEmpty()) {
+            return null;
+        }
+
+        Metrics ownMetrics = meanMetrics(own);
+        Metrics baselineMetrics = meanMetrics(baseline);
+        return new ExperimentListener.Preliminary(
+                armId,
+                scenarioPercents.values().stream()
+                        .mapToDouble(Double::doubleValue)
+                        .average()
+                        .orElseThrow(),
+                delta(ownMetrics.mspt(), baselineMetrics.mspt()),
+                delta(ownMetrics.fps(), baselineMetrics.fps()),
+                delta(ownMetrics.msPerChunk(), baselineMetrics.msPerChunk()),
+                scenarioPercents);
     }
 
     /** Relative spread of this round's baseline runs on one scenario, as a percent; null below n=2. */
