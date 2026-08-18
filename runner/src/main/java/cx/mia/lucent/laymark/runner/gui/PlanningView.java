@@ -82,6 +82,26 @@ public final class PlanningView extends JPanel {
     private static final String VERSION_KEY = "version.";
     private static final String SCHEDULE_KEY = "schedule";
     private static final String INTERVAL_KEY = "baselineInterval";
+    private static final String PROFILE_KEY = "profile";
+
+    /** A DocumentListener for callers who only care that the text changed. */
+    private interface SimpleDocumentListener
+            extends javax.swing.event.DocumentListener, java.util.function.Consumer<Object> {
+        @Override
+        default void insertUpdate(javax.swing.event.DocumentEvent event) {
+            accept(event);
+        }
+
+        @Override
+        default void removeUpdate(javax.swing.event.DocumentEvent event) {
+            accept(event);
+        }
+
+        @Override
+        default void changedUpdate(javax.swing.event.DocumentEvent event) {
+            accept(event);
+        }
+    }
     private static final String DEFAULT_SCHEDULE = "A,B,C,B,C";
     private static final java.util.prefs.Preferences PREFERENCES =
             java.util.prefs.Preferences.userRoot().node("cx/mia/lucent/laymark");
@@ -159,17 +179,39 @@ public final class PlanningView extends JPanel {
         }
         if (hereProfile != null) {
             profiles.setSelectedItem(hereProfile);
+        } else {
+            // The instance the planner sat in last time, so a crash or a new build reopens on
+            // the same experiment. The jar's own location still wins: where the runner sits is
+            // a stronger statement of intent than where it sat.
+            String remembered = PREFERENCES.get(PROFILE_KEY, null);
+            if (remembered != null && contains(profiles, remembered)) {
+                profiles.setSelectedItem(remembered);
+            }
         }
         // Attach only after population. JComboBox selects its first added item, and treating that
         // transient selection as deliberate would create configs in an unrelated profile before
         // selecting the instance the runner is actually sitting in.
         profiles.addActionListener(
                 unused -> {
+                    String profile = (String) profiles.getSelectedItem();
+                    if (profile != null) {
+                        PREFERENCES.put(PROFILE_KEY, profile);
+                    }
                     recallVersion();
                     refreshConfigStatus();
                     reloadMods();
                 });
         versions.addActionListener(unused -> rememberVersion());
+        // Saved as typed, not on Start: settings that survive only a completed launch are
+        // settings a crash forgets.
+        schedule.getDocument()
+                .addDocumentListener(
+                        (SimpleDocumentListener)
+                                unused ->
+                                        PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim()));
+        baselineInterval.addChangeListener(
+                unused ->
+                        PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue()));
         recallVersion();
         refreshConfigStatus();
         reloadMods();
@@ -549,6 +591,7 @@ public final class PlanningView extends JPanel {
                 });
         updateDependencyNotes();
         updateCount();
+        saveRoles();
     }
 
     private void assignInlayParent() {
@@ -815,9 +858,11 @@ public final class PlanningView extends JPanel {
             for (String name : installed(gameDirectory)) {
                 roles.put(name, new RoleControl(display(name), name, this::roleChanged));
             }
+            restoreRoles(gameDirectory);
         }
         refilter();
         presets();
+        updateDependencyNotes();
         updateCount();
         revalidate();
         repaint();
@@ -826,6 +871,72 @@ public final class PlanningView extends JPanel {
     private void roleChanged() {
         updateDependencyNotes();
         updateCount();
+        saveRoles();
+    }
+
+    /**
+     * Where the roster's assignments survive a crash or a new build: beside the instance's own
+     * run outputs, because the assignments describe that instance's mods and nothing else.
+     */
+    private Path plannerFile(Path gameDirectory) {
+        return gameDirectory.resolve(Laymark.WORK_DIR).resolve("planner.json");
+    }
+
+    /** Saved on every change, not on Start — a plan that survives only a completed launch is a
+     * plan a crash forgets. Best-effort: a cache that cannot be written must not block planning. */
+    private void saveRoles() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            return;
+        }
+        Map<String, String> assignments = new LinkedHashMap<>();
+        roles.forEach((name, control) -> assignments.put(name, control.role().name()));
+        Path file = plannerFile(gameDirectory());
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(
+                    file,
+                    new com.google.gson.GsonBuilder()
+                            .setPrettyPrinting()
+                            .create()
+                            .toJson(assignments),
+                    StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            System.err.println("could not save planner state to " + file + ": " + e.getMessage());
+        }
+    }
+
+    /** Reapplies saved assignments to files that still exist; a renamed jar starts over. */
+    private void restoreRoles(Path gameDirectory) {
+        Path file = plannerFile(gameDirectory);
+        if (!Files.isRegularFile(file)) {
+            return;
+        }
+        try {
+            Map<String, String> saved =
+                    new com.google.gson.Gson()
+                            .fromJson(
+                                    Files.readString(file, StandardCharsets.UTF_8),
+                                    new com.google.gson.reflect.TypeToken<
+                                            Map<String, String>>() {}.getType());
+            if (saved == null) {
+                return;
+            }
+            saved.forEach(
+                    (name, roleName) -> {
+                        RoleControl control = roles.get(name);
+                        if (control == null) {
+                            return;
+                        }
+                        try {
+                            control.set(Role.valueOf(roleName));
+                        } catch (IllegalArgumentException unknownRole) {
+                            // A newer file's vocabulary; the default assignment stands.
+                        }
+                    });
+        } catch (java.io.IOException | RuntimeException e) {
+            System.err.println("could not restore planner state from " + file + ": " + e.getMessage());
+        }
     }
 
     /**
