@@ -699,6 +699,39 @@ public final class PlanningView extends JPanel {
         }
     }
 
+    /**
+     * Locks or unlocks planning around a run.
+     *
+     * <p>The roster stays visible while an experiment executes — its rows carry the per-arm
+     * status — but a toggle that appeared to change a running experiment would be lying, so
+     * everything that shapes the next run is disabled until the current one finishes. Search
+     * stays live: finding a row is reading, not planning. Unlocking rebuilds the preset row so
+     * "Previous run's winners" reflects the run that just ended.
+     */
+    public void setPlanningEnabled(boolean enabled) {
+        profiles.setEnabled(enabled);
+        versions.setEnabled(enabled);
+        schedule.setEnabled(enabled);
+        baselineInterval.setEnabled(enabled);
+        roles.values().forEach(control -> control.lock(!enabled));
+        for (Component component : presetRow.getComponents()) {
+            component.setEnabled(enabled);
+        }
+        if (enabled) {
+            presets();
+            revalidate();
+            repaint();
+        }
+    }
+
+    /** The live state of a candidate's arm, shown on its roster row during a run. */
+    public void armStatus(String fileName, String text, java.awt.Color colour) {
+        RoleControl control = roles.get(fileName);
+        if (control != null) {
+            control.status(text, colour);
+        }
+    }
+
     private static String shorten(String fileName) {
         return fileName.replaceFirst("\\.jar$", "");
     }
@@ -725,6 +758,7 @@ public final class PlanningView extends JPanel {
 
         private final Map<Role, JToggleButton> buttons = new LinkedHashMap<>();
         private final JPanel notes = new JPanel();
+        private final JLabel runState = new JLabel("");
 
         RoleControl(String displayName, String fileName, Runnable onChange) {
             setLayout(new BorderLayout(8, 0));
@@ -753,6 +787,8 @@ public final class PlanningView extends JPanel {
             ButtonGroup group = new ButtonGroup();
             JPanel choices = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
             choices.setOpaque(false);
+            runState.setFont(runState.getFont().deriveFont(11f));
+            choices.add(runState);
             for (Role role : Role.values()) {
                 JToggleButton button = new JToggleButton(label(role));
                 button.setFocusPainted(false);
@@ -773,6 +809,19 @@ public final class PlanningView extends JPanel {
         void stripe(boolean shaded) {
             setOpaque(shaded);
             setBackground(Theme.RAISED);
+        }
+
+        /** The arm's live state during a run — queued, running, done, failed — beside the toggles. */
+        void status(String text, java.awt.Color colour) {
+            runState.setText(text);
+            runState.setForeground(colour);
+        }
+
+        void lock(boolean locked) {
+            buttons.values().forEach(button -> button.setEnabled(!locked));
+            if (!locked) {
+                runState.setText("");
+            }
         }
 
         /** What this row's bundle carries, one line per dependency; empty clears it. */

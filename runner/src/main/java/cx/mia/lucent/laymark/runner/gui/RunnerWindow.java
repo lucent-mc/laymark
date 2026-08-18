@@ -6,7 +6,6 @@ import cx.mia.lucent.laymark.core.stats.Comparison;
 import cx.mia.lucent.laymark.runner.ExperimentListener;
 import cx.mia.lucent.laymark.runner.RunControl;
 import java.awt.BorderLayout;
-import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -38,12 +37,13 @@ import javax.swing.Timer;
 import javax.swing.WindowConstants;
 
 /**
- * The runner's window: plan an experiment, then watch it run.
+ * The runner's window: the roster on the left, the results everywhere else, in every state.
  *
- * <p>Two views behind one title bar. The planning view is the only part that configures anything,
- * and it exists so the jar can be opened by double-clicking it; once Start is pressed the window
- * only observes and controls. Nothing here reorders or re-scores an arm — the schedule is the
- * experiment's, not the window's.
+ * <p>One layout, no view swap. Planning and watching are the same screen: the roster stays
+ * visible while a run executes (locked, with per-arm status on its rows), the columns and log
+ * stay visible while the next run is planned, and Start re-arms when a run finishes — so runs
+ * chain: results, adjust the roster, start again. The planning sidebar is the only part that
+ * configures anything; once Start is pressed the window only observes and controls.
  *
  * <p>It shows no summary statistic for the run in flight. No single live number separates a real
  * improvement from noise; the paired comparison in the run columns is the answer, and a headline
@@ -68,8 +68,6 @@ public final class RunnerWindow implements ExperimentListener {
     private final Launcher launcher;
 
     private final JFrame frame = new JFrame("Laymark");
-    private final CardLayout views = new CardLayout();
-    private final JPanel body = new JPanel(views);
     private final PlanningView planning = new PlanningView();
 
     private final JButton startButton = Theme.button("Start", true);
@@ -79,14 +77,12 @@ public final class RunnerWindow implements ExperimentListener {
     private final JLabel progress = Theme.muted("");
     private final JLabel eta = Theme.muted("");
 
-    private final JPanel candidatesList = new Theme.VerticalList();
     private final JPanel columns = new JPanel();
     private final JLabel currentArm = Theme.mono("—", Theme.TEXT);
     private final JLabel currentBaseline = Theme.mono("—", Theme.TEXT);
     private final JLabel currentScenario = Theme.mono("—", Theme.TEXT);
     private final JTextArea log = new JTextArea();
 
-    private final Map<String, CandidateRow> candidateRows = new LinkedHashMap<>();
     private Map<String, String> displayNames = Map.of();
     private final Map<String, Double> liveScores = new LinkedHashMap<>();
     private JPanel liveColumn;
@@ -134,15 +130,21 @@ public final class RunnerWindow implements ExperimentListener {
     // --- structure ---
 
     private void build() {
+        // One layout, no view swap: the roster is the left sidebar in every state, so the next
+        // run is planned while the last run's columns are still on screen, and Start re-arms once
+        // a run finishes.
+        planning.setPreferredSize(new Dimension(430, 0));
+
+        JPanel body = new JPanel(new BorderLayout(12, 0));
         body.setBackground(Theme.BACKGROUND);
-        body.add(planning, "plan");
-        body.add(runView(), "run");
+        body.add(planning, BorderLayout.WEST);
+        body.add(runView(), BorderLayout.CENTER);
 
         frame.setLayout(new BorderLayout());
         frame.getContentPane().setBackground(Theme.BACKGROUND);
         frame.add(topBar(), BorderLayout.NORTH);
         frame.add(body, BorderLayout.CENTER);
-        frame.setSize(1240, 820);
+        frame.setSize(1500, 900);
         frame.setMinimumSize(new Dimension(900, 620));
         frame.setLocationByPlatform(true);
 
@@ -198,10 +200,6 @@ public final class RunnerWindow implements ExperimentListener {
         view.setBackground(Theme.BACKGROUND);
         Theme.pad(view, 12, 12, 12, 12);
 
-        JPanel candidatesCard = Theme.card("Candidates");
-        candidatesCard.add(Theme.scroll(candidatesList), BorderLayout.CENTER);
-        candidatesCard.setPreferredSize(new Dimension(260, 0));
-
         columns.setLayout(new BoxLayout(columns, BoxLayout.X_AXIS));
         columns.setOpaque(false);
         JScrollPane columnScroll = Theme.scroll(columns);
@@ -216,18 +214,13 @@ public final class RunnerWindow implements ExperimentListener {
                                 + " a percentage without one is noise wearing a number."),
                 BorderLayout.SOUTH);
 
-        JPanel top = new JPanel(new BorderLayout(12, 0));
-        top.setOpaque(false);
-        top.add(candidatesCard, BorderLayout.WEST);
-        top.add(grid, BorderLayout.CENTER);
-
         JPanel bottom = new JPanel(new BorderLayout(0, 12));
         bottom.setOpaque(false);
         bottom.add(currentRunCard(), BorderLayout.NORTH);
         bottom.add(logCard(), BorderLayout.CENTER);
         bottom.setPreferredSize(new Dimension(0, 300));
 
-        view.add(top, BorderLayout.CENTER);
+        view.add(grid, BorderLayout.CENTER);
         view.add(bottom, BorderLayout.SOUTH);
         return view;
     }
@@ -312,10 +305,17 @@ public final class RunnerWindow implements ExperimentListener {
     private void enterRunView() {
         running = true;
         startedAt = System.currentTimeMillis();
+        armMillisTotal = 0;
+        armsFinished = 0;
+        baselineLabel = "baseline";
+        liveScores.clear();
+        columns.removeAll();
         startButton.setText("Pause");
         stopButton.setEnabled(true);
+        // The roster stays visible but stops being editable: the arms are already decided, and a
+        // toggle that appeared to change a running experiment would be lying.
+        planning.setPlanningEnabled(false);
         state("Starting", Theme.ACCENT);
-        views.show(body, "run");
         clock.start();
         dockBesideGame();
     }
@@ -432,20 +432,13 @@ public final class RunnerWindow implements ExperimentListener {
                     }
                     for (Arm arm : slate.arms()) {
                         if (arm.kind() == Arm.Kind.CANDIDATE) {
-                            candidateRows.computeIfAbsent(arm.id(), this::addCandidateRow);
+                            planning.armStatus(arm.id(), "queued", Theme.MUTED);
                         }
                     }
                     startColumn(baselineLabel);
                     updateProgress();
                     refresh();
                 });
-    }
-
-    private CandidateRow addCandidateRow(String id) {
-        CandidateRow row = new CandidateRow(display(id), id);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        candidatesList.add(row);
-        return row;
     }
 
     @Override
@@ -458,10 +451,7 @@ public final class RunnerWindow implements ExperimentListener {
                     currentBaseline.setText(
                             arm.kind() == Arm.Kind.CANDIDATE ? baselineLabel : "— reference run");
                     currentScenario.setText("starting the game");
-                    CandidateRow row = candidateRows.get(arm.id());
-                    if (row != null) {
-                        row.set("Running", Theme.ACCENT, false);
-                    }
+                    planning.armStatus(arm.id(), "running", Theme.ACCENT);
                     updateProgress();
                     refresh();
                 });
@@ -482,10 +472,8 @@ public final class RunnerWindow implements ExperimentListener {
                     }
                     armsFinished++;
                     currentScenario.setText("—");
-                    CandidateRow row = candidateRows.get(arm.id());
-                    if (row != null) {
-                        row.set(failed ? "Failed" : "Done", failed ? Theme.BAD : Theme.GOOD, !failed);
-                    }
+                    planning.armStatus(
+                            arm.id(), failed ? "failed" : "done", failed ? Theme.BAD : Theme.GOOD);
                     updateProgress();
                     updateEstimate();
                     refresh();
@@ -545,17 +533,21 @@ public final class RunnerWindow implements ExperimentListener {
         SwingUtilities.invokeLater(
                 () -> {
                     running = false;
+                    paused = false;
                     state(report == null ? "Stopped" : "Finished", report == null ? Theme.BAD : Theme.GOOD);
                     currentArm.setText("—");
                     currentBaseline.setText("—");
                     currentScenario.setText("—");
                     eta.setText("");
                     clock.stop();
-                    startButton.setEnabled(false);
+                    // Re-armed, not retired: the columns stay on screen, the roster unlocks, and
+                    // Start begins the next experiment with whatever the operator changes -- the
+                    // "Previous run's winners" preset is the natural next click.
+                    startButton.setText("Start");
+                    startButton.setEnabled(launcher != null);
                     stopButton.setEnabled(false);
-                    // The window stays open: the columns, candidates and log are the summary an
-                    // operator came back for, and closing now is a plain close.
-                    frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+                    baselineMods = Set.of();
+                    planning.setPlanningEnabled(true);
                 });
     }
 
@@ -901,42 +893,6 @@ public final class RunnerWindow implements ExperimentListener {
         row.add(Box.createVerticalStrut(2));
         row.add(detail);
         return row;
-    }
-
-    /** One line in the left-hand candidate list: name over state, with a dot for the state. */
-    private static final class CandidateRow extends JPanel {
-
-        private final JLabel state = Theme.muted("Queued");
-        private final Theme.Dot dot = new Theme.Dot(Theme.MUTED, false);
-
-        CandidateRow(String displayName, String fileName) {
-            setLayout(new BorderLayout(8, 0));
-            setOpaque(false);
-            setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 6, 4));
-            setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
-
-            JPanel text = new JPanel();
-            text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
-            text.setOpaque(false);
-            // BorderLayout.CENTER clips the label to whatever the dot leaves over, and a clipped
-            // JLabel renders an ellipsis -- so the dot is always visible, however long the name.
-            JLabel name = new JLabel(displayName);
-            name.setForeground(Theme.TEXT);
-            name.setToolTipText(fileName);
-            name.setAlignmentX(Component.LEFT_ALIGNMENT);
-            state.setAlignmentX(Component.LEFT_ALIGNMENT);
-            text.add(name);
-            text.add(state);
-
-            add(text, BorderLayout.CENTER);
-            add(dot, BorderLayout.EAST);
-        }
-
-        void set(String text, Color colour, boolean filled) {
-            state.setText(text);
-            state.setForeground(colour);
-            dot.set(colour, filled);
-        }
     }
 
     private void refresh() {
