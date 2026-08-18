@@ -310,10 +310,21 @@ public final class PlanningView extends JPanel {
                 BorderLayout.WEST);
         legend.add(modCount, BorderLayout.EAST);
 
-        JPanel top = new JPanel(new BorderLayout(8, 0));
+        // Presets and search on their own lines: they answer different questions ("what is the
+        // baseline" vs "where is that mod"), and sharing a row made the presets read as search
+        // controls.
+        JPanel top = new JPanel();
+        top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
         top.setOpaque(false);
-        top.add(presets(), BorderLayout.WEST);
-        top.add(search, BorderLayout.CENTER);
+        JPanel presetLine = presets();
+        presetLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JPanel searchLine = new JPanel(new BorderLayout());
+        searchLine.setOpaque(false);
+        searchLine.add(search, BorderLayout.CENTER);
+        searchLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        searchLine.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        top.add(presetLine);
+        top.add(searchLine);
 
         JPanel body = new JPanel(new BorderLayout(0, 8));
         body.setOpaque(false);
@@ -342,6 +353,14 @@ public final class PlanningView extends JPanel {
                     .filter(entry -> entry.getValue() > 0)
                     .sorted(Map.Entry.<RoleControl, Integer>comparingByValue().reversed())
                     .forEach(entry -> modList.add(entry.getKey()));
+        }
+        // Striped by visible position, not roster position: the stripe exists to carry the eye
+        // from a name to its buttons across the row's width, and a filtered list re-stripes.
+        int visible = 0;
+        for (Component component : modList.getComponents()) {
+            if (component instanceof RoleControl row) {
+                row.stripe(visible++ % 2 == 1);
+            }
         }
         modList.add(Box.createVerticalGlue());
         modList.revalidate();
@@ -429,7 +448,58 @@ public final class PlanningView extends JPanel {
             parent.addActionListener(unused -> assignInlayParent());
             presetRow.add(parent);
         }
+
+        // Only offered when a previous run promoted something: continuing from nothing is the
+        // Blank slate button, not this one wearing a misleading name.
+        List<String> winners = previousWinners();
+        if (!winners.isEmpty()) {
+            JButton previous = Theme.button("Previous run's winners", false);
+            previous.setToolTipText(
+                    "Blank slate plus what the last run promoted: " + String.join(", ", winners)
+                            + ". Candidates are measured against the stack the last selection"
+                            + " arrived at, so runs chain instead of starting over.");
+            previous.addActionListener(
+                    unused -> assign(name -> winners.contains(name) ? Role.BASELINE : Role.OFF));
+            presetRow.add(previous);
+        }
         return presetRow;
+    }
+
+    /**
+     * What the most recent selection in this profile promoted, by file name; empty when there is
+     * no previous run, its report is unreadable, or nothing won.
+     *
+     * <p>Read from the newest {@code .laymark/<runId>/experiment.json}. Only winners still
+     * installed count — a stack member since uninstalled cannot be a baseline entry, and silently
+     * dropping it beats refusing the preset over a mod the operator already removed.
+     */
+    private List<String> previousWinners() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            return List.of();
+        }
+        Path workDir = root.resolve("profiles").resolve(profile).resolve(Laymark.WORK_DIR);
+        if (!Files.isDirectory(workDir)) {
+            return List.of();
+        }
+        try (Stream<Path> runs = Files.list(workDir)) {
+            Path newest =
+                    runs.filter(Files::isDirectory)
+                            .filter(run -> Files.isRegularFile(run.resolve("experiment.json")))
+                            .max(java.util.Comparator.comparing(run -> run.getFileName().toString()))
+                            .orElse(null);
+            if (newest == null) {
+                return List.of();
+            }
+            var report =
+                    cx.mia.lucent.laymark.core.report.ReportCodec.read(
+                            Files.readString(
+                                    newest.resolve("experiment.json"), StandardCharsets.UTF_8));
+            return report.stack().stream().filter(roles::containsKey).toList();
+        } catch (java.io.IOException | RuntimeException e) {
+            // An unreadable old report costs a convenience button, nothing more.
+            return List.of();
+        }
     }
 
     private Set<String> inlayLayer() {
@@ -697,6 +767,12 @@ public final class PlanningView extends JPanel {
 
             add(text, BorderLayout.CENTER);
             add(choices, BorderLayout.EAST);
+        }
+
+        /** Alternating background, so the eye can follow a name to its buttons across the width. */
+        void stripe(boolean shaded) {
+            setOpaque(shaded);
+            setBackground(Theme.RAISED);
         }
 
         /** What this row's bundle carries, one line per dependency; empty clears it. */
