@@ -1,12 +1,12 @@
-// config/laymark.jsonc — the complete reference.
+// This config defines Laymark's "plan". It specifies the settings to configure before running
+// arms and scenarios, and it specifies the scenarios to run.
 //
-// This file IS the plan: hand-authored, read by the runner for scheduling and by the in-game
-// harness for execution. Comments (// and /* */) are allowed and ignored. Malformed JSON and
-// invalid values are reported instead of silently changing the run.
+// Each scenario comes with its own settings overrides, or you can backref a settingsPreset.
+// Scenarios also specify details about the world to create, the positioning for the player,
+// the content to generate (using .schem), what to measure, and when to stop.
 //
-// Both the runner and mod copy this exact file to config/laymark.jsonc when it is missing. Once
-// created, it is yours: Laymark never overwrites it. Every schema field and accepted named value
-// appears below. Every field marked (optional) has the default shown.
+// Both the runner and the mod copy this default config, with this reference comments to
+// config/laymark.jsonc when it is missing.
 {
   // Schema version. Bumped only when an existing document would be read WRONGLY,
   // not merely partially. Currently always 1.
