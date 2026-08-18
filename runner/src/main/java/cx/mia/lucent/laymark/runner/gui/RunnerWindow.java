@@ -1023,14 +1023,46 @@ public final class RunnerWindow implements ExperimentListener {
         return spacer;
     }
 
+    /** One header-over-value column of a card's stats table. */
+    private record StatColumn(String header, String tooltip, String value, Color colour) {}
+
+    /**
+     * The card's numbers as a table where each column takes the width it needs.
+     *
+     * <p>Not a GridLayout: that sizes every column to the widest one, and five equal columns in a
+     * 300px card leave ~35px each — every value ellipsised to "…", a grid of dots. Natural widths
+     * fit the same five columns with room to spare.
+     */
+    private static JPanel statsTable(List<StatColumn> statColumns) {
+        JPanel grid = new JPanel(new java.awt.GridBagLayout());
+        grid.setOpaque(false);
+        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
+        var constraints = new java.awt.GridBagConstraints();
+        constraints.anchor = java.awt.GridBagConstraints.WEST;
+        for (int i = 0; i < statColumns.size(); i++) {
+            StatColumn column = statColumns.get(i);
+            constraints.gridx = i;
+            constraints.insets = new java.awt.Insets(0, i == 0 ? 0 : 10, 0, 0);
+            constraints.gridy = 0;
+            JLabel header = Theme.small(column.header());
+            header.setToolTipText(column.tooltip());
+            grid.add(header, constraints);
+            constraints.gridy = 1;
+            JLabel value = Theme.mono(column.value(), column.colour());
+            value.setToolTipText(column.tooltip());
+            grid.add(value, constraints);
+        }
+        grid.setMaximumSize(grid.getPreferredSize());
+        return grid;
+    }
+
     /** The finished card's grid shape, fed from the running aggregates. */
     private JPanel preliminaryGrid(ExperimentListener.Preliminary preliminary) {
-        record Column(String header, String tooltip, String value, Color colour) {}
-        List<Column> gridColumns = new ArrayList<>();
+        List<StatColumn> gridColumns = new ArrayList<>();
         String soFar = ", aggregated over this candidate's arms so far; no interval yet";
         if (preliminary.msptDelta() != null) {
             gridColumns.add(
-                    new Column(
+                    new StatColumn(
                             "mspt",
                             "server mean tick time, delta vs baseline" + soFar,
                             String.format(Locale.ROOT, "%+.1f", preliminary.msptDelta()),
@@ -1038,7 +1070,7 @@ public final class RunnerWindow implements ExperimentListener {
         }
         if (preliminary.fpsDelta() != null) {
             gridColumns.add(
-                    new Column(
+                    new StatColumn(
                             "fps",
                             "mean framerate, delta vs baseline" + soFar,
                             String.format(Locale.ROOT, "%+.0f", preliminary.fpsDelta()),
@@ -1046,7 +1078,7 @@ public final class RunnerWindow implements ExperimentListener {
         }
         if (preliminary.msPerChunkDelta() != null) {
             gridColumns.add(
-                    new Column(
+                    new StatColumn(
                             "ms/ch",
                             "time per chunk received, delta vs baseline" + soFar,
                             String.format(Locale.ROOT, "%+.2f", preliminary.msPerChunkDelta()),
@@ -1057,7 +1089,7 @@ public final class RunnerWindow implements ExperimentListener {
                 .forEach(
                         (scenarioId, scenarioPercent) ->
                                 gridColumns.add(
-                                        new Column(
+                                        new StatColumn(
                                                 abbreviate(scenarioId),
                                                 scenarioId
                                                         + ": scored improvement vs baseline"
@@ -1066,21 +1098,7 @@ public final class RunnerWindow implements ExperimentListener {
                                                         Locale.ROOT, "%+.1f%%", scenarioPercent),
                                                 direction(scenarioPercent, false))));
 
-        JPanel grid = new JPanel(new java.awt.GridLayout(2, gridColumns.size(), 12, 0));
-        grid.setOpaque(false);
-        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-        for (Column column : gridColumns) {
-            JLabel header = Theme.small(column.header());
-            header.setToolTipText(column.tooltip());
-            grid.add(header);
-        }
-        for (Column column : gridColumns) {
-            JLabel value = Theme.mono(column.value(), column.colour());
-            value.setToolTipText(column.tooltip());
-            grid.add(value);
-        }
-        grid.setMaximumSize(grid.getPreferredSize());
-        return grid;
+        return statsTable(gridColumns);
     }
 
     /**
@@ -1168,14 +1186,13 @@ public final class RunnerWindow implements ExperimentListener {
      * grid reads at a glance and compares down a column across cards.
      */
     private JPanel statsGrid(CandidateScore score, List<Comparison> comparisons) {
-        record Column(String header, String tooltip, String value, Color colour) {}
-        List<Column> columns = new ArrayList<>();
+        List<StatColumn> columns = new ArrayList<>();
 
         // Lower is better for mspt and ms/chunk, higher for fps: green means "moved the way you
         // want", not "went up".
         if (score.msptDelta() != null) {
             columns.add(
-                    new Column(
+                    new StatColumn(
                             "mspt",
                             "server mean tick time, delta vs baseline",
                             String.format(Locale.ROOT, "%+.1f", score.msptDelta()),
@@ -1183,7 +1200,7 @@ public final class RunnerWindow implements ExperimentListener {
         }
         if (score.fpsDelta() != null) {
             columns.add(
-                    new Column(
+                    new StatColumn(
                             "fps",
                             "mean framerate, delta vs baseline",
                             String.format(Locale.ROOT, "%+.0f", score.fpsDelta()),
@@ -1191,7 +1208,7 @@ public final class RunnerWindow implements ExperimentListener {
         }
         if (score.msPerChunkDelta() != null) {
             columns.add(
-                    new Column(
+                    new StatColumn(
                             "ms/ch",
                             "time per chunk received, delta vs baseline",
                             String.format(Locale.ROOT, "%+.2f", score.msPerChunkDelta()),
@@ -1202,7 +1219,7 @@ public final class RunnerWindow implements ExperimentListener {
                         .sorted(java.util.Comparator.comparing(Comparison::scenarioId))
                         .toList()) {
             columns.add(
-                    new Column(
+                    new StatColumn(
                             abbreviate(comparison.scenarioId()),
                             comparison.scenarioId() + ": " + comparison.describe(),
                             String.format(
@@ -1210,21 +1227,7 @@ public final class RunnerWindow implements ExperimentListener {
                             bandColour(comparison)));
         }
 
-        JPanel grid = new JPanel(new java.awt.GridLayout(2, columns.size(), 12, 0));
-        grid.setOpaque(false);
-        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-        for (Column column : columns) {
-            JLabel header = Theme.small(column.header());
-            header.setToolTipText(column.tooltip());
-            grid.add(header);
-        }
-        for (Column column : columns) {
-            JLabel value = Theme.mono(column.value(), column.colour());
-            value.setToolTipText(column.tooltip());
-            grid.add(value);
-        }
-        grid.setMaximumSize(grid.getPreferredSize());
-        return grid;
+        return statsTable(columns);
     }
 
     private static Color direction(double delta, boolean lowerIsBetter) {
