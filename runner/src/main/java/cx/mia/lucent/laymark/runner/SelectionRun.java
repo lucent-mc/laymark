@@ -49,6 +49,33 @@ public final class SelectionRun {
 
     private SelectionRun() {}
 
+    /** The arm id every lap measures its candidates against. */
+    private static final String BASELINE_ARM = "baseline";
+
+    /**
+     * The baseline arms' runs for one scenario, in schedule order.
+     *
+     * <p><strong>Per scenario, always.</strong> Two scenarios measure different work in the same
+     * unit -- generating a chunk costs milliseconds and so does loading one, an order of
+     * magnitude apart -- so a baseline pool holding both compares a loading time against a
+     * generation time and reports the ratio between two unrelated quantities as an improvement.
+     * Derived from the same {@code measured} list the candidate side is filtered from, so the two
+     * sides of a comparison cannot come from different bookkeeping.
+     */
+    private static List<Comparison.Run> baselineRunsFor(
+            List<Measured> measured, String scenarioId) {
+        return measured.stream()
+                .filter(m -> m.armId().equals(BASELINE_ARM))
+                .filter(m -> m.scenarioId().equals(scenarioId))
+                .map(m -> new Comparison.Run(m.armId(), m.sequence(), m.scoredMillis(), true))
+                .toList();
+    }
+
+    /** Every scenario that produced a measurement this lap, in first-seen order. */
+    private static List<String> scenarioIds(List<Measured> measured) {
+        return measured.stream().map(Measured::scenarioId).distinct().toList();
+    }
+
     /** The channels a candidate card summarises; null where the machine could not measure one. */
     private record Metrics(Double mspt, Double fps, Double msPerChunk) {}
 
@@ -168,7 +195,6 @@ public final class SelectionRun {
                         round, totalRounds, arms.size(), baselineLabel);
 
                 List<Measured> measured = new ArrayList<>();
-                List<Comparison.Run> baselineRuns = new ArrayList<>();
                 for (Arm arm : arms) {
                     if (control.pauseRequested()) {
                         listener.stateChanged("paused");
@@ -320,10 +346,6 @@ public final class SelectionRun {
                                                 channels.mspt(),
                                                 channels.fps(),
                                                 channels.msPerChunk())));
-                        if (arm.kind() == Arm.Kind.BASELINE) {
-                            baselineRuns.add(
-                                    new Comparison.Run(arm.id(), sequence, scored, true));
-                        }
                     }
                     listener.runFinished(
                             sequence, arm, counted == 0 ? 0 : total / counted, counted == 0);
@@ -340,8 +362,16 @@ public final class SelectionRun {
                     break;
                 }
 
-                List<Drift.VoidWindow> voids = Drift.detect(baselineRuns);
-                allBaselineRuns.addAll(baselineRuns);
+                // Drift is judged within a scenario, for the same reason comparisons are: a
+                // baseline series that mixed two scenarios would read every alternation between
+                // them as the machine moving. The windows are then applied to every scenario --
+                // an arm that ran while the machine wandered is suspect whatever it measured.
+                List<Drift.VoidWindow> voids = new ArrayList<>();
+                for (String scenarioId : scenarioIds(measured)) {
+                    List<Comparison.Run> scenarioBaselines = baselineRunsFor(measured, scenarioId);
+                    voids.addAll(Drift.detect(scenarioBaselines));
+                    allBaselineRuns.addAll(scenarioBaselines);
+                }
 
                 // This round's baseline spread per scenario is the next comparison's floor
                 // evidence: fold it in before comparing, so even round 1 benefits from what its
@@ -356,7 +386,7 @@ public final class SelectionRun {
                 MachineProfiles.store(profile);
 
                 Map<String, List<Comparison>> byCandidate =
-                        compare(bundles, measured, baselineRuns, voids, profile);
+                        compare(bundles, measured, voids, profile);
                 byCandidate.values().forEach(allComparisons::addAll);
 
                 // Score against the ORIGINAL baseline too, from round 2 on: the current round's
@@ -364,7 +394,7 @@ public final class SelectionRun {
                 // original says what the whole combination bought.
                 if (originalBaseline == null) {
                     originalBaseline =
-                            measured.stream().filter(m -> m.armId().equals("baseline")).toList();
+                            measured.stream().filter(m -> m.armId().equals(BASELINE_ARM)).toList();
                 }
                 Map<String, Double> vsOriginal =
                         round == 1
@@ -388,7 +418,7 @@ public final class SelectionRun {
                                 .orElse(null);
 
                 List<ExperimentListener.CandidateScore> scores =
-                        summarise(outcomes, byCandidate, measured, baselineRuns, vsOriginal);
+                        summarise(outcomes, byCandidate, measured, vsOriginal);
                 List<Comparison> roundComparisons =
                         byCandidate.values().stream().flatMap(List::stream).toList();
                 listener.roundCompleted(round, baselineLabel, roundComparisons, scores, promoted);
@@ -604,7 +634,7 @@ public final class SelectionRun {
             String armId, List<Measured> measured) {
         List<Measured> own = measured.stream().filter(m -> m.armId().equals(armId)).toList();
         List<Measured> baseline =
-                measured.stream().filter(m -> m.armId().equals("baseline")).toList();
+                measured.stream().filter(m -> m.armId().equals(BASELINE_ARM)).toList();
 
         Map<String, ExperimentListener.PreliminaryScenario> scenarios = new LinkedHashMap<>();
         for (String scenarioId :
@@ -681,17 +711,17 @@ public final class SelectionRun {
     private static Map<String, List<Comparison>> compare(
             List<Bundle> bundles,
             List<Measured> measured,
-            List<Comparison.Run> baselineRuns,
             List<Drift.VoidWindow> voids,
             cx.mia.lucent.laymark.core.stats.MachineProfile profile) {
 
         Map<String, List<Comparison>> byCandidate = new LinkedHashMap<>();
         for (Bundle bundle : bundles) {
             List<Comparison> comparisons = new ArrayList<>();
-            for (String scenarioId :
-                    measured.stream().map(Measured::scenarioId).distinct().toList()) {
+            for (String scenarioId : scenarioIds(measured)) {
                 List<Comparison.Run> baseline =
-                        baselineRuns.stream().map(run -> flagged(run, voids)).toList();
+                        baselineRunsFor(measured, scenarioId).stream()
+                                .map(run -> flagged(run, voids))
+                                .toList();
                 List<Comparison.Run> candidate =
                         measured.stream()
                                 .filter(m -> m.armId().equals(bundle.candidate()))
@@ -732,22 +762,11 @@ public final class SelectionRun {
             List<Measured> originalBaseline,
             List<Drift.VoidWindow> voids) {
 
-        List<Comparison.Run> original =
-                originalBaseline.stream()
-                        .map(
-                                m ->
-                                        new Comparison.Run(
-                                                m.armId(), m.sequence(), m.scoredMillis(), true))
-                        .toList();
         Map<String, Double> scores = new LinkedHashMap<>();
         for (Bundle bundle : bundles) {
             List<Comparison> comparisons = new ArrayList<>();
-            for (String scenarioId :
-                    originalBaseline.stream().map(Measured::scenarioId).distinct().toList()) {
-                List<Comparison.Run> baseline =
-                        original.stream()
-                                .filter(run -> run.armId().equals("baseline"))
-                                .toList();
+            for (String scenarioId : scenarioIds(originalBaseline)) {
+                List<Comparison.Run> baseline = baselineRunsFor(originalBaseline, scenarioId);
                 List<Comparison.Run> candidate =
                         measured.stream()
                                 .filter(m -> m.armId().equals(bundle.candidate()))
@@ -785,16 +804,10 @@ public final class SelectionRun {
             List<Selection.Outcome> outcomes,
             Map<String, List<Comparison>> byCandidate,
             List<Measured> measured,
-            List<Comparison.Run> baselineRuns,
             Map<String, Double> vsOriginal) {
 
         List<Measured> baselineMeasured =
-                measured.stream()
-                        .filter(
-                                m ->
-                                        baselineRuns.stream()
-                                                .anyMatch(run -> run.sequence() == m.sequence()))
-                        .toList();
+                measured.stream().filter(m -> m.armId().equals(BASELINE_ARM)).toList();
         Metrics baseline = meanMetrics(baselineMeasured);
 
         List<ExperimentListener.CandidateScore> scores = new ArrayList<>();

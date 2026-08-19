@@ -91,8 +91,26 @@ public record SelectionReport(
         return cumulative;
     }
 
-    /** The improvement attributed to one candidate at the point it was promoted. */
+    /**
+     * The improvement attributed to one candidate at the point it was promoted.
+     *
+     * <p>The promoting round's score, <strong>not</strong> the average of every round the
+     * candidate appeared in. It is re-measured against a different baseline each round, so those
+     * scores answer different questions and their mean answers none of them — and it is the
+     * promoting round's number that {@link #cumulativeByPosition} compounds, because that is the
+     * round whose baseline was the stack below it.
+     */
     public double marginalFor(String candidate) {
+        for (Round round : rounds) {
+            for (Round.Entry entry : round.entries()) {
+                if (entry.candidate().equals(candidate) && "PROMOTED".equals(entry.verdict())) {
+                    return entry.scorePercent();
+                }
+            }
+        }
+        // Never promoted, so there is no point of promotion to report from: its comparisons are
+        // all it has. A candidate in the stack always has one, so this is the odd caller asking
+        // about a candidate that lost.
         return comparisons.stream()
                 .filter(comparison -> comparison.candidateId().equals(candidate))
                 .mapToDouble(Comparison::improvementPercent)
