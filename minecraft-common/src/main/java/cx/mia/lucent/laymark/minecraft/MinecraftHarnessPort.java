@@ -582,9 +582,17 @@ public final class MinecraftHarnessPort implements HarnessPort {
     /** How often to ask whether a completion target has been met. */
     private static final Duration PROGRESS_POLL = Duration.ofMillis(100);
 
-    /** Why the GPU channel is empty, or null when it worked. Reported as a run-level flag. */
+    /**
+     * Why the GPU channel is empty, or null when it worked. Reported as a run-level flag.
+     *
+     * <p>A short timeout, not the resource-reload default: this is a getter, and it is asked at
+     * the end of the run when the client thread may be grinding through the final world's save.
+     * A healthy client answers in milliseconds; an unhealthy one should cost seconds, because
+     * the caller treats the answer as metadata either way.
+     */
     public String gpuUnavailableReason() {
-        return ClientThread.call("checking gpu channel", gpuTimer::unavailableReason);
+        return ClientThread.call(
+                "checking gpu channel", Duration.ofSeconds(15), gpuTimer::unavailableReason);
     }
 
     /** Why the Spark channel is empty, or null when it worked. */

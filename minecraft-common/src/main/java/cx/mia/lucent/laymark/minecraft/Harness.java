@@ -131,8 +131,18 @@ public final class Harness {
      */
     private static RunResult withChannelFlags(RunResult result, MinecraftHarnessPort port) {
         List<String> flags = new ArrayList<>(result.flags());
-        if (port.gpuUnavailableReason() != null) {
-            flags.add("gpu timing unavailable: " + port.gpuUnavailableReason());
+        // A channel-status question is metadata about a run whose measurements are already
+        // complete. If the client thread cannot answer -- it can be deep in the final world's
+        // save at this point -- the honest outcome is a flag saying so, not a failed run: a
+        // 40-minute arm died here once because a diagnostic getter timed out.
+        String gpu;
+        try {
+            gpu = port.gpuUnavailableReason();
+        } catch (cx.mia.lucent.laymark.core.harness.HarnessException unanswerable) {
+            gpu = "status unknown; " + unanswerable.getMessage();
+        }
+        if (gpu != null) {
+            flags.add("gpu timing unavailable: " + gpu);
         }
         if (port.sparkUnavailableReason() != null) {
             flags.add("server statistics unavailable: " + port.sparkUnavailableReason());
