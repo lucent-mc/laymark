@@ -111,6 +111,12 @@ public final class RunnerWindow implements ExperimentListener {
     // outside the components because every preliminary update rebuilds the column.
     private final Set<String> expandedLive = new java.util.HashSet<>();
     private final Set<String> collapsedLiveScenarios = new java.util.HashSet<>();
+    // The lap's candidates and where each stands — queued, testing, done, failed — so the lap
+    // column names its whole field from the moment the lap starts, not only the measured part.
+    private final Map<String, Integer> lapArmsTotal = new LinkedHashMap<>();
+    private final Map<String, Integer> lapArmsDone = new java.util.HashMap<>();
+    private final Set<String> lapFailed = new java.util.HashSet<>();
+    private String runningCandidate;
     private JPanel liveColumn;
     private JPanel liveRows;
     private String baselineLabel = "baseline";
@@ -767,12 +773,18 @@ public final class RunnerWindow implements ExperimentListener {
                             baselineMods = Set.copyOf(arm.enabled());
                         }
                     }
+                    lapArmsTotal.clear();
+                    lapArmsDone.clear();
+                    lapFailed.clear();
+                    runningCandidate = null;
                     for (Arm arm : slate.arms()) {
                         if (arm.kind() == Arm.Kind.CANDIDATE) {
                             planning.armStatus(arm.id(), "queued", Theme.MUTED);
+                            lapArmsTotal.merge(arm.id(), 1, Integer::sum);
                         }
                     }
                     startColumn(baselineLabel);
+                    renderLiveColumn();
                     updateProgress();
                     refresh();
                 });
@@ -789,13 +801,15 @@ public final class RunnerWindow implements ExperimentListener {
                             arm.kind() == Arm.Kind.CANDIDATE ? baselineLabel : "— reference run");
                     currentScenario.setText("starting the game");
                     planning.armStatus(arm.id(), "running", Theme.ACCENT);
-                    if (arm.kind() == Arm.Kind.CANDIDATE
-                            && !expandedLive.contains(arm.id())) {
-                        // The card follows the run: the candidate in flight opens so its numbers
-                        // land in view, and the previous one closes to make the room.
-                        expandedLive.clear();
-                        expandedLive.add(arm.id());
-                        collapsedLiveScenarios.clear();
+                    if (arm.kind() == Arm.Kind.CANDIDATE) {
+                        runningCandidate = arm.id();
+                        if (!expandedLive.contains(arm.id())) {
+                            // The card follows the run: the candidate in flight opens so its
+                            // numbers land in view, and the previous one closes for the room.
+                            expandedLive.clear();
+                            expandedLive.add(arm.id());
+                            collapsedLiveScenarios.clear();
+                        }
                         renderLiveColumn();
                     }
                     updateProgress();
@@ -820,6 +834,16 @@ public final class RunnerWindow implements ExperimentListener {
                     currentScenario.setText("—");
                     planning.armStatus(
                             arm.id(), failed ? "failed" : "done", failed ? Theme.BAD : Theme.GOOD);
+                    if (arm.kind() == Arm.Kind.CANDIDATE) {
+                        lapArmsDone.merge(arm.id(), 1, Integer::sum);
+                        if (failed) {
+                            lapFailed.add(arm.id());
+                        }
+                        if (arm.id().equals(runningCandidate)) {
+                            runningCandidate = null;
+                        }
+                        renderLiveColumn();
+                    }
                     updateProgress();
                     updateEstimate();
                     refresh();
@@ -1261,6 +1285,65 @@ public final class RunnerWindow implements ExperimentListener {
                                         ExperimentListener.Preliminary::improvementPercent)
                                 .reversed())
                 .forEach(preliminary -> liveRows.add(preliminaryCard(++rank[0], preliminary)));
+        // Everyone still to be measured, below the measured: the lap column names its whole
+        // field from the start, and rows turn into cards as their numbers arrive.
+        for (String id : lapArmsTotal.keySet()) {
+            if (!liveScores.containsKey(id)) {
+                liveRows.add(pendingRow(++rank[0], id));
+            }
+        }
+        liveRows.revalidate();
+        liveRows.repaint();
+    }
+
+    /** Where a candidate stands in this lap, for its chip: queued, testing, arm counts, done. */
+    private String candidateState(String id) {
+        if (lapFailed.contains(id)) {
+            return "failed";
+        }
+        if (id.equals(runningCandidate)) {
+            return "testing…";
+        }
+        int total = lapArmsTotal.getOrDefault(id, 0);
+        int done = lapArmsDone.getOrDefault(id, 0);
+        if (total > 0 && done >= total) {
+            return "done";
+        }
+        if (done > 0) {
+            return done + "/" + total + " arms";
+        }
+        return "queued";
+    }
+
+    private JLabel stateChip(String id) {
+        String state = candidateState(id);
+        Color colour =
+                switch (state) {
+                    case "failed" -> Theme.BAD;
+                    case "testing…" -> Theme.ACCENT;
+                    case "done" -> Theme.GOOD;
+                    default -> Theme.MUTED;
+                };
+        JLabel chip = Theme.small(state);
+        chip.setForeground(colour);
+        return chip;
+    }
+
+    /** A candidate the lap has not measured yet: its name and where it stands, card-shaped. */
+    private JPanel pendingRow(int rank, String id) {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setBackground(Theme.RAISED);
+        row.setBorder(
+                javax.swing.BorderFactory.createCompoundBorder(
+                        new Theme.RoundedBorder(Theme.LINE, 8),
+                        javax.swing.BorderFactory.createEmptyBorder(8, 10, 8, 10)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel name = new JLabel(rank + ".  " + display(id));
+        name.setForeground(Theme.TEXT);
+        name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
+        row.add(name, BorderLayout.WEST);
+        row.add(stateChip(id), BorderLayout.EAST);
+        return fullWidthRow(row);
     }
 
     /**
@@ -1290,6 +1373,7 @@ public final class RunnerWindow implements ExperimentListener {
         name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
         title.add(chevron);
         title.add(name);
+        title.add(stateChip(preliminary.id()));
         double percent = preliminary.improvementPercent();
         JLabel scoreLabel =
                 Theme.mono(
