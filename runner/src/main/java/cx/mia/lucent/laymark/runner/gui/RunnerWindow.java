@@ -504,7 +504,11 @@ public final class RunnerWindow implements ExperimentListener {
                                 resultsSplit.getHeight()
                                         - resultsSplit.getDividerLocation()
                                         - resultsSplit.getDividerSize();
-                        if (dragged >= 0) {
+                        // A floor, not >= 0: transient layout passes (macOS fires divider events
+                        // for clamps a human never made) would otherwise record "the operator
+                        // dragged the log to nothing" and the anchor would faithfully keep it
+                        // there. Hiding the log is the drawer's job, not a zero-height drag's.
+                        if (dragged >= 40) {
                             logHeight = dragged;
                         }
                     }
