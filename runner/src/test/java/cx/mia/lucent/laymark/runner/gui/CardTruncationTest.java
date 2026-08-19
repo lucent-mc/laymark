@@ -57,7 +57,7 @@ class CardTruncationTest {
                                         6.0, 0.5, 3.0, -2.5, 1, 2));
                         var preliminary =
                                 new ExperimentListener.Preliminary(
-                                        LONG_NAME, 7.5, 0.5, 3.0, -2.5, scenarios);
+                                        LONG_NAME, 7.5, 0.5, 3.0, scenarios);
 
                         Method build =
                                 RunnerWindow.class.getDeclaredMethod(

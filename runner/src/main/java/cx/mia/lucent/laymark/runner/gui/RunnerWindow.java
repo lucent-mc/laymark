@@ -1609,14 +1609,6 @@ public final class RunnerWindow implements ExperimentListener {
                             String.format(Locale.ROOT, "%+.0f", preliminary.fpsDelta()),
                             direction(preliminary.fpsDelta(), false)));
         }
-        if (preliminary.msPerChunkDelta() != null) {
-            gridColumns.add(
-                    new StatColumn(
-                            "ms/ch",
-                            "time per chunk received, delta vs baseline" + soFar,
-                            String.format(Locale.ROOT, "%+.2f", preliminary.msPerChunkDelta()),
-                            direction(preliminary.msPerChunkDelta(), true)));
-        }
         preliminary
                 .scenarios()
                 .forEach(
@@ -1916,14 +1908,6 @@ public final class RunnerWindow implements ExperimentListener {
                             "mean framerate, delta vs baseline",
                             String.format(Locale.ROOT, "%+.0f", score.fpsDelta()),
                             direction(score.fpsDelta(), false)));
-        }
-        if (score.msPerChunkDelta() != null) {
-            columns.add(
-                    new StatColumn(
-                            "ms/ch",
-                            "time per chunk received, delta vs baseline",
-                            String.format(Locale.ROOT, "%+.2f", score.msPerChunkDelta()),
-                            direction(score.msPerChunkDelta(), true)));
         }
         for (Comparison comparison :
                 comparisons.stream()

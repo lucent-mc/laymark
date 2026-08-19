@@ -686,7 +686,6 @@ public final class SelectionRun {
                         .orElseThrow(),
                 delta(ownMetrics.mspt(), baselineMetrics.mspt()),
                 delta(ownMetrics.fps(), baselineMetrics.fps()),
-                delta(ownMetrics.msPerChunk(), baselineMetrics.msPerChunk()),
                 scenarios);
     }
 
@@ -851,7 +850,6 @@ public final class SelectionRun {
                                     : BandGate.weightedScore(comparisons, Map.of()),
                             delta(own.mspt(), baseline.mspt()),
                             delta(own.fps(), baseline.fps()),
-                            delta(own.msPerChunk(), baseline.msPerChunk()),
                             vsOriginal.get(id),
                             outcome.verdict().toString().toLowerCase(java.util.Locale.ROOT),
                             outcome.detail(),

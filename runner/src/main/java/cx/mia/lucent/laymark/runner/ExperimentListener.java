@@ -82,7 +82,6 @@ public interface ExperimentListener {
             double improvementPercent,
             Double msptDelta,
             Double fpsDelta,
-            Double msPerChunkDelta,
             java.util.Map<String, PreliminaryScenario> scenarios) {}
 
     /**
@@ -99,23 +98,25 @@ public interface ExperimentListener {
 
     default void preliminaryScore(Preliminary preliminary) {}
 
+    /** One scenario's metric channels for one candidate, as candidate-mean minus baseline-mean. */
+    record ScenarioChannels(Double msptDelta, Double fpsDelta, Double msPerChunkDelta) {}
+
     /**
      * One candidate's round in summary: the score a card leads with, the metric deltas beneath it,
      * and the verdict that decided its fate.
      *
      * <p>Deltas are candidate-mean minus baseline-mean for this round, null where a channel could
-     * not be measured. {@code vsOriginalPercent} is null in round 1, where the current baseline
-     * <em>is</em> the original.
+     * not be measured. Time per chunk is <strong>not</strong> among them: it is only comparable
+     * within a scenario — generating a chunk and loading one differ by an order of magnitude —
+     * so it lives on {@link ScenarioChannels} and in the per-scenario columns instead.
+     * {@code vsOriginalPercent} is null in round 1, where the current baseline <em>is</em> the
+     * original.
      */
-    /** One scenario's metric channels for one candidate, as candidate-mean minus baseline-mean. */
-    record ScenarioChannels(Double msptDelta, Double fpsDelta, Double msPerChunkDelta) {}
-
     record CandidateScore(
             String id,
             double score,
             Double msptDelta,
             Double fpsDelta,
-            Double msPerChunkDelta,
             Double vsOriginalPercent,
             String verdict,
             String detail,
@@ -134,10 +135,6 @@ public interface ExperimentListener {
             }
             if (fpsDelta != null) {
                 text.append(String.format(java.util.Locale.ROOT, "  fps %+.0f", fpsDelta));
-            }
-            if (msPerChunkDelta != null) {
-                text.append(
-                        String.format(java.util.Locale.ROOT, "  ms/chunk %+.2f", msPerChunkDelta));
             }
             if (vsOriginalPercent != null) {
                 text.append(
