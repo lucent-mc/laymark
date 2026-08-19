@@ -1101,8 +1101,7 @@ public final class RunnerWindow implements ExperimentListener {
             rows.add(previewRow(i + 1, known ? candidates.get(i) : "not yet known", known));
         }
 
-        JPanel holder = new JPanel(new BorderLayout());
-        holder.setOpaque(false);
+        ColumnView holder = new ColumnView();
         holder.add(rows, BorderLayout.NORTH);
         JScrollPane rowScroll = Theme.scroll(holder);
         rowScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -1125,7 +1124,9 @@ public final class RunnerWindow implements ExperimentListener {
         if (!known) {
             label.setFont(label.getFont().deriveFont(Font.ITALIC));
         }
-        row.add(label, BorderLayout.WEST);
+        label.setToolTipText(label.getText());
+        label.setMinimumSize(new Dimension(0, 0));
+        row.add(label, BorderLayout.CENTER);
         return fullWidthRow(row);
     }
 
@@ -1249,8 +1250,7 @@ public final class RunnerWindow implements ExperimentListener {
         liveRows.setOpaque(false);
 
         // Rows pinned to the top of the column; a BoxLayout left to fill would spread them down it.
-        JPanel holder = new JPanel(new BorderLayout());
-        holder.setOpaque(false);
+        ColumnView holder = new ColumnView();
         holder.add(liveRows, BorderLayout.NORTH);
 
         // Vertically scrollable: an expanded card can want more height than the column has, and
@@ -1341,7 +1341,9 @@ public final class RunnerWindow implements ExperimentListener {
         JLabel name = new JLabel(rank + ".  " + display(id));
         name.setForeground(Theme.TEXT);
         name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
-        row.add(name, BorderLayout.WEST);
+        name.setToolTipText(name.getText());
+        name.setMinimumSize(new Dimension(0, 0));
+        row.add(name, BorderLayout.CENTER);
         row.add(stateChip(id), BorderLayout.EAST);
         return fullWidthRow(row);
     }
@@ -1366,20 +1368,16 @@ public final class RunnerWindow implements ExperimentListener {
         headline.setOpaque(false);
         headline.setAlignmentX(Component.LEFT_ALIGNMENT);
         JLabel chevron = Theme.small(expanded ? "▾" : "▸");
-        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        title.setOpaque(false);
         JLabel name = new JLabel(rank + ".  " + display(preliminary.id()));
         name.setForeground(Theme.TEXT);
         name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
-        title.add(chevron);
-        title.add(name);
-        title.add(stateChip(preliminary.id()));
+        JPanel title = titleRow(chevron, name, stateChip(preliminary.id()));
         double percent = preliminary.improvementPercent();
         JLabel scoreLabel =
                 Theme.mono(
                         String.format(Locale.ROOT, "%+.1f%%  so far", percent),
                         percent > 0 ? Theme.GOOD : percent < 0 ? Theme.BAD : Theme.MUTED);
-        headline.add(title, BorderLayout.WEST);
+        headline.add(title, BorderLayout.CENTER);
         headline.add(scoreLabel, BorderLayout.EAST);
         card.add(headline);
         card.add(preliminaryGrid(preliminary));
@@ -1428,11 +1426,8 @@ public final class RunnerWindow implements ExperimentListener {
         JPanel header = new JPanel(new BorderLayout(6, 0));
         header.setOpaque(false);
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        title.setOpaque(false);
-        title.add(chevron);
-        title.add(Theme.small(scenarioId));
-        header.add(title, BorderLayout.WEST);
+        JPanel title = titleRow(chevron, Theme.small(scenarioId), null);
+        header.add(title, BorderLayout.CENTER);
         header.add(
                 Theme.mono(
                         String.format(Locale.ROOT, "%+.1f%%", stats.improvementPercent()),
@@ -1493,6 +1488,66 @@ public final class RunnerWindow implements ExperimentListener {
                     }
                 });
         return section;
+    }
+
+    /**
+     * A card's title line: chevron, name, optional trailing chip.
+     *
+     * <p>The name sits in the stretchy slot, so a long mod name is ellipsised to the card width
+     * instead of widening the card past its column -- where it took the stat columns with it and
+     * pushed them out of sight behind whatever the column overlapped.
+     */
+    private static JPanel titleRow(JLabel chevron, JLabel name, javax.swing.JComponent trailing) {
+        JPanel title = new JPanel(new BorderLayout(4, 0));
+        title.setOpaque(false);
+        // Truncated on screen, whole in the tooltip: the name is still identity.
+        name.setToolTipText(name.getText());
+        name.setMinimumSize(new Dimension(0, 0));
+        title.add(chevron, BorderLayout.WEST);
+        title.add(name, BorderLayout.CENTER);
+        if (trailing != null) {
+            title.add(trailing, BorderLayout.EAST);
+        }
+        return title;
+    }
+
+    /**
+     * A scroll view that is never wider than its viewport.
+     *
+     * <p>Without this a scroll pane sizes its view to the widest child preferred width, so one
+     * long name made the whole column wider than the window and everything past the edge simply
+     * disappeared. Tracking the viewport hands cards a real width to truncate against.
+     */
+    private static final class ColumnView extends JPanel implements javax.swing.Scrollable {
+        ColumnView() {
+            super(new BorderLayout());
+            setOpaque(false);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(java.awt.Rectangle view, int axis, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(java.awt.Rectangle view, int axis, int direction) {
+            return 64;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
     }
 
     /** One header-over-value column of a card's stats table. */
@@ -1628,19 +1683,16 @@ public final class RunnerWindow implements ExperimentListener {
         headline.setOpaque(false);
         headline.setAlignmentX(Component.LEFT_ALIGNMENT);
         JLabel chevron = Theme.small("▸");
-        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        title.setOpaque(false);
         JLabel name = new JLabel((winner ? "★ " : "") + display(score.id()));
         name.setForeground(winner ? Theme.GOOD : Theme.TEXT);
         name.setFont(name.getFont().deriveFont(winner ? Font.BOLD : Font.PLAIN, 13f));
-        title.add(chevron);
-        title.add(name);
+        JPanel title = titleRow(chevron, name, null);
         JLabel scoreLabel =
                 Theme.mono(
                         String.format(Locale.ROOT, "%+.1f", score.score()),
                         score.score() > 0 ? Theme.GOOD : score.score() < 0 ? Theme.BAD : Theme.MUTED);
         scoreLabel.setFont(scoreLabel.getFont().deriveFont(Font.BOLD, 13f));
-        headline.add(title, BorderLayout.WEST);
+        headline.add(title, BorderLayout.CENTER);
         headline.add(scoreLabel, BorderLayout.EAST);
         card.add(headline);
 
@@ -1698,11 +1750,8 @@ public final class RunnerWindow implements ExperimentListener {
         JPanel header = new JPanel(new BorderLayout(6, 0));
         header.setOpaque(false);
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        title.setOpaque(false);
-        title.add(chevron);
-        title.add(Theme.small(comparison.scenarioId()));
-        header.add(title, BorderLayout.WEST);
+        JPanel title = titleRow(chevron, Theme.small(comparison.scenarioId()), null);
+        header.add(title, BorderLayout.CENTER);
         header.add(
                 Theme.mono(
                         String.format(Locale.ROOT, "%+.1f%%", comparison.improvementPercent()),
@@ -1823,7 +1872,8 @@ public final class RunnerWindow implements ExperimentListener {
      * child actually grows it — a maximum captured once at build time would pin the card at its
      * collapsed size forever.
      */
-    private static class ExpandingPanel extends JPanel {
+    // Package-private so the card-truncation test can find the collapsibles and open them.
+    static class ExpandingPanel extends JPanel {
         @Override
         public Dimension getMaximumSize() {
             return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);

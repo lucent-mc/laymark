@@ -135,6 +135,8 @@ public final class SelectionRun {
         List<Comparison.Run> allBaselineRuns = new ArrayList<>();
         List<SelectionReport.Round> roundHistory = new ArrayList<>();
         List<String> trustFlags = new ArrayList<>();
+        // Candidate arms that never produced a result, by file: reported rather than fatal.
+        Map<String, Integer> failedArms = new LinkedHashMap<>();
         List<String> stack = new ArrayList<>();
         String scenarioListRevision = null;
         List<Measured> originalBaseline = null;
@@ -254,7 +256,24 @@ public final class SelectionRun {
                             stopped = true;
                             break;
                         }
-                        throw e;
+                        // A candidate arm that hangs or dies costs its own comparison, not the
+                        // experiment. With a hundred arms scheduled, one bad mod must not throw
+                        // away every measurement taken before it -- and "this mod cannot even
+                        // complete a run" is itself a finding worth reaching the report.
+                        //
+                        // The baseline and the acclimation arm are not optional in the same way:
+                        // every candidate in the lap is measured against the baseline, so losing
+                        // it leaves nothing for the rest of the lap to mean.
+                        if (arm.kind() != Arm.Kind.CANDIDATE) {
+                            throw e;
+                        }
+                        System.out.printf("  arm failed, continuing: %s%n", e.getMessage());
+                        trustFlags.add(
+                                "arm " + sequence + " (" + arm.id() + ") failed: " + e.getMessage());
+                        failedArms.merge(arm.id(), 1, Integer::sum);
+                        listener.runFinished(sequence, arm, 0, true);
+                        sequence++;
+                        continue;
                     }
 
                     scenarioListRevision = result.scenarioListRevision();
@@ -414,6 +433,15 @@ public final class SelectionRun {
             if (!mods.read().matches(initial)) {
                 System.err.println("WARNING: the instance was not fully restored; check mods/");
             }
+        }
+
+        if (!failedArms.isEmpty()) {
+            // Said once, plainly, where the operator is already looking: a candidate whose arms
+            // all died has no comparison in this report, and that absence should not read as
+            // "measured and unremarkable".
+            System.out.printf(
+                    "%n%d candidate arm(s) failed and were skipped: %s%n",
+                    failedArms.values().stream().mapToInt(Integer::intValue).sum(), failedArms);
         }
 
         SelectionReport report =
