@@ -200,6 +200,7 @@ public final class PlanningView extends JPanel {
                     recallVersion();
                     refreshConfigStatus();
                     reloadMods();
+                    planChanged.run();
                 });
         versions.addActionListener(unused -> rememberVersion());
         // Saved as typed, not on Start: settings that survive only a completed launch are
@@ -207,11 +208,15 @@ public final class PlanningView extends JPanel {
         schedule.getDocument()
                 .addDocumentListener(
                         (SimpleDocumentListener)
-                                unused ->
-                                        PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim()));
+                                unused -> {
+                                    PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
+                                    planChanged.run();
+                                });
         baselineInterval.addChangeListener(
-                unused ->
-                        PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue()));
+                unused -> {
+                    PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue());
+                    planChanged.run();
+                });
         recallVersion();
         refreshConfigStatus();
         reloadMods();
@@ -592,6 +597,7 @@ public final class PlanningView extends JPanel {
         updateDependencyNotes();
         updateCount();
         saveRoles();
+        planChanged.run();
     }
 
     private void assignInlayParent() {
@@ -872,6 +878,44 @@ public final class PlanningView extends JPanel {
         updateDependencyNotes();
         updateCount();
         saveRoles();
+        planChanged.run();
+    }
+
+    // --- the live plan preview's window into the form ---
+
+    private Runnable planChanged = () -> {};
+
+    /**
+     * Called whenever the operator changes something that reshapes the plan: a role toggle, a
+     * preset, the schedule, the interval, the instance. Not called for system-driven reloads
+     * (unlock after a run), so finished results are not wiped by the run that produced them.
+     */
+    public void onPlanChanged(Runnable listener) {
+        planChanged = listener;
+    }
+
+    /** The candidate files in roster order, as display names. */
+    public List<String> candidateDisplays() {
+        return roles.entrySet().stream()
+                .filter(entry -> entry.getValue().role() == Role.CANDIDATE)
+                .map(entry -> display(entry.getKey()))
+                .toList();
+    }
+
+    /** The schedule as currently typed, or null while the text does not parse. */
+    public Schedule previewSchedule() {
+        try {
+            return new Schedule(
+                    cx.mia.lucent.laymark.core.experiment.RoundTemplate.parse(schedule.getText()),
+                    (Integer) baselineInterval.getValue());
+        } catch (RuntimeException invalid) {
+            return null;
+        }
+    }
+
+    /** The selected instance's game directory, or null before one is chosen. */
+    public Path previewGameDirectory() {
+        return profiles.getSelectedItem() == null ? null : gameDirectory();
     }
 
     /**

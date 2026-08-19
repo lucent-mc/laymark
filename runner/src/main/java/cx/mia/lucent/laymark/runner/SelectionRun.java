@@ -162,7 +162,7 @@ public final class SelectionRun {
                 listener.scheduleBuilt(
                         new ExperimentListener.Slate(arms, round, totalRounds, projectedArms));
                 System.out.printf(
-                        "%n=== round %d/%d: %d arm(s) against %s%n",
+                        "%n=== lap %d/%d: %d arm(s) against %s%n",
                         round, totalRounds, arms.size(), baselineLabel);
 
                 List<Measured> measured = new ArrayList<>();

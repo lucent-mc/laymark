@@ -241,6 +241,10 @@ public final class RunnerWindow implements ExperimentListener {
                             updateEstimate();
                             frame.repaint();
                         });
+
+        // The plan draws itself where its laps will land, live from the first look.
+        planning.onPlanChanged(() -> SwingUtilities.invokeLater(this::renderPlanPreview));
+        SwingUtilities.invokeLater(this::renderPlanPreview);
     }
 
     private JPanel topBar() {
@@ -543,7 +547,7 @@ public final class RunnerWindow implements ExperimentListener {
      * it is measured against, and which scenario is capturing.
      */
     private JPanel currentRunCard() {
-        JPanel card = Theme.card("Current run");
+        JPanel card = Theme.card("Current arm");
         JPanel fields = new JPanel(new GridLayout(1, 3, 24, 0));
         fields.setOpaque(false);
         fields.add(field("Arm being tested", currentArm));
@@ -888,12 +892,12 @@ public final class RunnerWindow implements ExperimentListener {
 
     // --- header readouts ---
 
-    /** "18/28 arms in 4/7 runs" — arms are the launches, runs are the selection rounds. */
+    /** "18/28 arms in 4/7 laps" — arms are the launches, laps the selection rounds of one run. */
     private void updateProgress() {
         progress.setText(
                 String.format(
                         Locale.ROOT,
-                        "%d/%d arms in %d/%d runs",
+                        "%d/%d arms in %d/%d laps",
                         armsFinished,
                         Math.max(armsTotal, armsFinished),
                         round,
@@ -924,6 +928,196 @@ public final class RunnerWindow implements ExperimentListener {
         long seconds = millis / 1000;
         return String.format(
                 Locale.ROOT, "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60);
+    }
+
+    // --- the plan preview, live while planning ---
+
+    private java.nio.file.Path cachedPlanPath;
+    private long cachedPlanStamp;
+    private cx.mia.lucent.laymark.core.plan.RunPlan cachedPlan;
+
+    /**
+     * The run as currently planned, drawn where its laps will land: one estimated column per
+     * lap, lap 1 filled with the chosen candidates, later laps holding "not yet known" slots —
+     * the arms are certain, their occupants are what the run exists to decide. Redrawn on every
+     * roster, schedule or instance change; replaced by the real columns the moment Start runs.
+     */
+    private void renderPlanPreview() {
+        if (running) {
+            return;
+        }
+        List<String> candidates = planning.candidateDisplays();
+        var schedule = planning.previewSchedule();
+        cx.mia.lucent.laymark.core.plan.RunPlan plan = previewPlan();
+
+        columns.removeAll();
+        liveColumn = null;
+        liveRows = null;
+
+        int pool = candidates.size();
+        if (pool == 0 || schedule == null) {
+            progress.setText(
+                    schedule == null ? "the schedule does not parse" : "no candidates selected");
+            eta.setText("");
+            columns.revalidate();
+            columns.repaint();
+            refresh();
+            return;
+        }
+
+        Arm baseline = new Arm("b", Arm.Kind.BASELINE, Set.of());
+        Arm acclimation = new Arm("a", Arm.Kind.ACCLIMATION, Set.of());
+        int totalArms = 0;
+        for (int lap = 1; lap <= pool; lap++) {
+            int inLap = pool - lap + 1;
+            List<Arm> dummies = new ArrayList<>();
+            for (int i = 0; i < inLap; i++) {
+                dummies.add(new Arm("c" + i, Arm.Kind.CANDIDATE, Set.of()));
+            }
+            int arms = schedule.expand(dummies, baseline, acclimation, lap != 1).size();
+            totalArms += arms;
+            columns.add(previewColumn(lap, inLap, lap == 1 ? candidates : List.of(), arms));
+            columns.add(Box.createHorizontalStrut(10));
+        }
+
+        int scenarios = plan == null ? 0 : plan.scenarios().size();
+        progress.setText(
+                String.format(
+                        Locale.ROOT,
+                        "%d laps · %d arms · %d scenarios",
+                        pool,
+                        totalArms,
+                        scenarios));
+        eta.setText(plan == null ? "" : "ETA ~" + clock(totalArms * armEstimateMillis(plan)));
+        columns.revalidate();
+        columns.repaint();
+        refresh();
+    }
+
+    /** One projected lap: how many arms it costs, and who runs in it where that is knowable. */
+    private JPanel previewColumn(int lap, int slots, List<String> candidates, int arms) {
+        JPanel column = Theme.card(null);
+        column.setLayout(new BorderLayout(0, 8));
+        column.setAlignmentY(Component.TOP_ALIGNMENT);
+        column.setPreferredSize(new Dimension(300, 320));
+        column.setMaximumSize(new Dimension(300, Integer.MAX_VALUE));
+
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setOpaque(false);
+        JLabel title = Theme.heading("Lap " + lap + "  (estimated)");
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JLabel sub =
+                Theme.muted(
+                        arms
+                                + " arms"
+                                + (lap == 1
+                                        ? ""
+                                        : "  ·  baseline grows by lap " + (lap - 1) + "'s winner"));
+        sub.setAlignmentX(Component.CENTER_ALIGNMENT);
+        header.add(title);
+        header.add(Box.createVerticalStrut(4));
+        header.add(sub);
+
+        JPanel rows = new JPanel();
+        rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
+        rows.setOpaque(false);
+        for (int i = 0; i < slots; i++) {
+            boolean known = i < candidates.size();
+            rows.add(previewRow(i + 1, known ? candidates.get(i) : "not yet known", known));
+        }
+
+        JPanel holder = new JPanel(new BorderLayout());
+        holder.setOpaque(false);
+        holder.add(rows, BorderLayout.NORTH);
+        JScrollPane rowScroll = Theme.scroll(holder);
+        rowScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+
+        column.add(header, BorderLayout.NORTH);
+        column.add(rowScroll, BorderLayout.CENTER);
+        return column;
+    }
+
+    private static JPanel previewRow(int rank, String name, boolean known) {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setBackground(Theme.RAISED);
+        row.setBorder(
+                javax.swing.BorderFactory.createCompoundBorder(
+                        new Theme.RoundedBorder(Theme.LINE, 8),
+                        javax.swing.BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel label = new JLabel(rank + ".  " + name);
+        label.setForeground(known ? Theme.TEXT : Theme.MUTED);
+        if (!known) {
+            label.setFont(label.getFont().deriveFont(Font.ITALIC));
+        }
+        row.add(label, BorderLayout.WEST);
+        return fullWidthRow(row);
+    }
+
+    /** The instance's scenario config resolved to a plan, cached by the file's timestamp. */
+    private cx.mia.lucent.laymark.core.plan.RunPlan previewPlan() {
+        java.nio.file.Path directory = planning.previewGameDirectory();
+        if (directory == null) {
+            return null;
+        }
+        java.nio.file.Path config =
+                directory.resolve(cx.mia.lucent.laymark.core.Laymark.CONFIG_PATH);
+        try {
+            if (!java.nio.file.Files.isRegularFile(config)) {
+                return null;
+            }
+            long stamp = java.nio.file.Files.getLastModifiedTime(config).toMillis();
+            if (config.equals(cachedPlanPath) && stamp == cachedPlanStamp) {
+                return cachedPlan;
+            }
+            cachedPlan =
+                    cx.mia.lucent.laymark.core.scenario.ConfigCodec.read(
+                                    java.nio.file.Files.readString(config, StandardCharsets.UTF_8))
+                            .resolve("preview", "preview");
+            cachedPlanPath = config;
+            cachedPlanStamp = stamp;
+            return cachedPlan;
+        } catch (java.io.IOException | RuntimeException unreadable) {
+            cachedPlanPath = null;
+            cachedPlan = null;
+            return null;
+        }
+    }
+
+    /**
+     * A per-arm guess, tilde-grade on purpose. TIME stops add up exactly; CHUNKS stops are
+     * guessed from what the measured phase costs per chunk; FRAMES assume ~100fps. The rest is
+     * launch, world and settling overhead, and every scenario runs twice per arm — a cold and a
+     * warm pass.
+     */
+    private static long armEstimateMillis(cx.mia.lucent.laymark.core.plan.RunPlan plan) {
+        long millis = 60_000; // launch, handshake, shutdown
+        for (cx.mia.lucent.laymark.core.plan.ScenarioSpec scenario : plan.scenarios()) {
+            long capture =
+                    switch (scenario.stopCondition().kind()) {
+                        case TIME -> scenario.stopCondition().target();
+                        case FRAMES -> scenario.stopCondition().target() * 10;
+                        case CHUNKS ->
+                                scenario.stopCondition().target() * msPerChunkGuess(scenario);
+                    };
+            if (scenario.measure().contains(cx.mia.lucent.laymark.core.Phase.SPAWN_GENERATION)) {
+                capture += 30_000;
+            }
+            // World creation or reopening, the join barrier, settling -- per repetition.
+            millis += (capture + 25_000L) * scenario.repetitions() * 2;
+        }
+        return millis;
+    }
+
+    private static long msPerChunkGuess(cx.mia.lucent.laymark.core.plan.ScenarioSpec scenario) {
+        if (scenario.measure().contains(cx.mia.lucent.laymark.core.Phase.UNGENERATED_TRAVERSAL)) {
+            return 40; // generation and everything downstream
+        }
+        if (scenario.measure().contains(cx.mia.lucent.laymark.core.Phase.GENERATED_STREAMING)) {
+            return 8; // deserialise, send, mesh, upload
+        }
+        return 15;
     }
 
     /** An arm named by what it changes, since its id alone rarely says what is being tried. */
@@ -968,7 +1162,7 @@ public final class RunnerWindow implements ExperimentListener {
         JPanel header = new JPanel();
         header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
         header.setOpaque(false);
-        JLabel title = Theme.heading("Run " + round);
+        JLabel title = Theme.heading("Lap " + round);
         title.setAlignmentX(Component.CENTER_ALIGNMENT);
         JLabel against = Theme.muted("Baseline: " + baseline);
         against.setAlignmentX(Component.CENTER_ALIGNMENT);
