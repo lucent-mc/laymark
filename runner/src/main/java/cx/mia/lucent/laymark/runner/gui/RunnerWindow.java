@@ -620,17 +620,27 @@ public final class RunnerWindow implements ExperimentListener {
     }
 
     private void enterRunView() {
+        // The run starts over its own placeholders, not a blank: if the columns hold anything
+        // else (the last run's results), the preview redraws first, and each starting lap then
+        // replaces its placeholder in place. Stability over spectacle.
+        if (!columnsArePreview) {
+            renderPlanPreview();
+        }
+        columnsArePreview = false;
         running = true;
         startedAt = System.currentTimeMillis();
         armMillisTotal = 0;
         armsFinished = 0;
+        armsTotal = plannedArms;
+        round = 1;
+        rounds = Math.max(1, plannedLaps);
         baselineLabel = "baseline";
         liveScores.clear();
         expandedLive.clear();
         collapsedLiveScenarios.clear();
-        columns.removeAll();
         startButton.setText("Pause");
         stopButton.setEnabled(true);
+        updateProgress();
         // The roster stays visible but stops being editable: the arms are already decided, and a
         // toggle that appeared to change a running experiment would be lying.
         planning.setPlanningEnabled(false);
@@ -886,6 +896,20 @@ public final class RunnerWindow implements ExperimentListener {
                     startButton.setEnabled(launcher != null);
                     stopButton.setEnabled(false);
                     baselineMods = Set.of();
+                    // Placeholders for laps that never ran (greedy selection stops when nothing
+                    // promotes) come down with their struts; measured columns stay.
+                    for (Component placeholder : previewColumns) {
+                        int at = columns.getComponentZOrder(placeholder);
+                        if (at >= 0) {
+                            columns.remove(at);
+                            if (at < columns.getComponentCount()) {
+                                columns.remove(at); // the strut that followed it
+                            }
+                        }
+                    }
+                    previewColumns.clear();
+                    columns.revalidate();
+                    columns.repaint();
                     planning.setPlanningEnabled(true);
                 });
     }
@@ -912,7 +936,15 @@ public final class RunnerWindow implements ExperimentListener {
         long elapsed = System.currentTimeMillis() - startedAt;
         int left = Math.max(armsTotal, armsFinished) - armsFinished;
         if (armsFinished == 0 || left <= 0) {
-            eta.setText("elapsed " + clock(elapsed));
+            // Until an arm has finished there is no evidence, but there is still the plan: the
+            // tilde-grade estimate counts down rather than the readout going blank at Start.
+            eta.setText(
+                    plannedRunMillis > 0 && left > 0
+                            ? "elapsed "
+                                    + clock(elapsed)
+                                    + "   ETA ~"
+                                    + clock(Math.max(0, plannedRunMillis - elapsed))
+                            : "elapsed " + clock(elapsed));
             return;
         }
         long perArm = armMillisTotal / armsFinished;
@@ -936,6 +968,14 @@ public final class RunnerWindow implements ExperimentListener {
     private long cachedPlanStamp;
     private cx.mia.lucent.laymark.core.plan.RunPlan cachedPlan;
 
+    // The placeholders the preview drew, in lap order. A starting lap replaces its own
+    // placeholder in place, so Start changes the columns' content, never their shape.
+    private final List<Component> previewColumns = new ArrayList<>();
+    private boolean columnsArePreview;
+    private int plannedLaps;
+    private int plannedArms;
+    private long plannedRunMillis;
+
     /**
      * The run as currently planned, drawn where its laps will land: one estimated column per
      * lap, lap 1 filled with the chosen candidates, later laps holding "not yet known" slots —
@@ -951,8 +991,13 @@ public final class RunnerWindow implements ExperimentListener {
         cx.mia.lucent.laymark.core.plan.RunPlan plan = previewPlan();
 
         columns.removeAll();
+        previewColumns.clear();
         liveColumn = null;
         liveRows = null;
+        columnsArePreview = true;
+        plannedLaps = 0;
+        plannedArms = 0;
+        plannedRunMillis = 0;
 
         int pool = candidates.size();
         if (pool == 0 || schedule == null) {
@@ -976,9 +1021,13 @@ public final class RunnerWindow implements ExperimentListener {
             }
             int arms = schedule.expand(dummies, baseline, acclimation, lap != 1).size();
             totalArms += arms;
-            columns.add(previewColumn(lap, inLap, lap == 1 ? candidates : List.of(), arms));
+            JPanel column = previewColumn(lap, inLap, lap == 1 ? candidates : List.of(), arms);
+            previewColumns.add(column);
+            columns.add(column);
             columns.add(Box.createHorizontalStrut(10));
         }
+        plannedLaps = pool;
+        plannedArms = totalArms;
 
         int scenarios = plan == null ? 0 : plan.scenarios().size();
         progress.setText(
@@ -988,7 +1037,8 @@ public final class RunnerWindow implements ExperimentListener {
                         pool,
                         totalArms,
                         scenarios));
-        eta.setText(plan == null ? "" : "ETA ~" + clock(totalArms * armEstimateMillis(plan)));
+        plannedRunMillis = plan == null ? 0 : totalArms * armEstimateMillis(plan);
+        eta.setText(plannedRunMillis == 0 ? "" : "ETA ~" + clock(plannedRunMillis));
         columns.revalidate();
         columns.repaint();
         refresh();
@@ -1186,8 +1236,17 @@ public final class RunnerWindow implements ExperimentListener {
 
         liveColumn.add(header, BorderLayout.NORTH);
         liveColumn.add(rowScroll, BorderLayout.CENTER);
-        columns.add(liveColumn);
-        columns.add(Box.createHorizontalStrut(10));
+        // Into the lap's own placeholder where the preview drew one; the strut after it stays.
+        Component placeholder =
+                round - 1 < previewColumns.size() ? previewColumns.get(round - 1) : null;
+        int at = placeholder == null ? -1 : columns.getComponentZOrder(placeholder);
+        if (at >= 0) {
+            columns.remove(at);
+            columns.add(liveColumn, at);
+        } else {
+            columns.add(liveColumn);
+            columns.add(Box.createHorizontalStrut(10));
+        }
     }
 
     private void renderLiveColumn() {
