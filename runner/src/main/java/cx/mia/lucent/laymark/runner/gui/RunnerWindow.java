@@ -107,6 +107,10 @@ public final class RunnerWindow implements ExperimentListener {
 
     private Map<String, String> displayNames = Map.of();
     private final Map<String, ExperimentListener.Preliminary> liveScores = new LinkedHashMap<>();
+    // Which live cards and scenario sections the operator (or the run itself) has open. Kept
+    // outside the components because every preliminary update rebuilds the column.
+    private final Set<String> expandedLive = new java.util.HashSet<>();
+    private final Set<String> collapsedLiveScenarios = new java.util.HashSet<>();
     private JPanel liveColumn;
     private JPanel liveRows;
     private String baselineLabel = "baseline";
@@ -614,6 +618,8 @@ public final class RunnerWindow implements ExperimentListener {
         armsFinished = 0;
         baselineLabel = "baseline";
         liveScores.clear();
+        expandedLive.clear();
+        collapsedLiveScenarios.clear();
         columns.removeAll();
         startButton.setText("Pause");
         stopButton.setEnabled(true);
@@ -765,6 +771,15 @@ public final class RunnerWindow implements ExperimentListener {
                             arm.kind() == Arm.Kind.CANDIDATE ? baselineLabel : "— reference run");
                     currentScenario.setText("starting the game");
                     planning.armStatus(arm.id(), "running", Theme.ACCENT);
+                    if (arm.kind() == Arm.Kind.CANDIDATE
+                            && !expandedLive.contains(arm.id())) {
+                        // The card follows the run: the candidate in flight opens so its numbers
+                        // land in view, and the previous one closes to make the room.
+                        expandedLive.clear();
+                        expandedLive.add(arm.id());
+                        collapsedLiveScenarios.clear();
+                        renderLiveColumn();
+                    }
                     updateProgress();
                     refresh();
                 });
@@ -822,6 +837,8 @@ public final class RunnerWindow implements ExperimentListener {
                         baselineLabel = baseline + " + " + display(promoted);
                     }
                     liveScores.clear();
+                    expandedLive.clear();
+                    collapsedLiveScenarios.clear();
                     refresh();
                 });
     }
@@ -1004,23 +1021,137 @@ public final class RunnerWindow implements ExperimentListener {
                         javax.swing.BorderFactory.createEmptyBorder(8, 10, 8, 10)));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
 
+        boolean expanded = expandedLive.contains(preliminary.id());
         JPanel headline = new JPanel(new BorderLayout(8, 0));
         headline.setOpaque(false);
         headline.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel chevron = Theme.small(expanded ? "▾" : "▸");
+        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        title.setOpaque(false);
         JLabel name = new JLabel(rank + ".  " + display(preliminary.id()));
         name.setForeground(Theme.TEXT);
         name.setFont(name.getFont().deriveFont(Font.PLAIN, 13f));
+        title.add(chevron);
+        title.add(name);
         double percent = preliminary.improvementPercent();
         JLabel scoreLabel =
                 Theme.mono(
                         String.format(Locale.ROOT, "%+.1f%%  so far", percent),
                         percent > 0 ? Theme.GOOD : percent < 0 ? Theme.BAD : Theme.MUTED);
-        headline.add(name, BorderLayout.WEST);
+        headline.add(title, BorderLayout.WEST);
         headline.add(scoreLabel, BorderLayout.EAST);
         card.add(headline);
         card.add(preliminaryGrid(preliminary));
 
+        JPanel details = new ExpandingPanel();
+        details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
+        details.setOpaque(false);
+        details.setAlignmentX(Component.LEFT_ALIGNMENT);
+        details.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        details.setVisible(expanded);
+        preliminary
+                .scenarios()
+                .forEach(
+                        (scenarioId, stats) ->
+                                details.add(
+                                        preliminaryScenarioSection(
+                                                preliminary.id(), scenarioId, stats)));
+        card.add(details);
+        wireExpander(
+                headline,
+                chevron,
+                details,
+                show -> {
+                    if (show) {
+                        expandedLive.add(preliminary.id());
+                    } else {
+                        expandedLive.remove(preliminary.id());
+                    }
+                });
+
         return fullWidthRow(card);
+    }
+
+    /** One scenario streaming in: open by default inside an open card, collapsible by click. */
+    private JPanel preliminaryScenarioSection(
+            String candidateId, String scenarioId, ExperimentListener.PreliminaryScenario stats) {
+        String key = candidateId + "|" + scenarioId;
+        boolean open = !collapsedLiveScenarios.contains(key);
+
+        JPanel section = new ExpandingPanel();
+        section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+        section.setOpaque(false);
+        section.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel chevron = Theme.small(open ? "▾" : "▸");
+        JPanel header = new JPanel(new BorderLayout(6, 0));
+        header.setOpaque(false);
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        title.setOpaque(false);
+        title.add(chevron);
+        title.add(Theme.small(scenarioId));
+        header.add(title, BorderLayout.WEST);
+        header.add(
+                Theme.mono(
+                        String.format(Locale.ROOT, "%+.1f%%", stats.improvementPercent()),
+                        direction(stats.improvementPercent(), false)),
+                BorderLayout.EAST);
+        header.setMaximumSize(
+                new Dimension(Integer.MAX_VALUE, header.getPreferredSize().height));
+
+        JPanel body = new ExpandingPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setOpaque(false);
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 16, 4, 0));
+        body.setVisible(open);
+        body.add(
+                statRow(
+                        "improvement so far",
+                        String.format(Locale.ROOT, "%+.1f%%", stats.improvementPercent()),
+                        direction(stats.improvementPercent(), false)));
+        body.add(
+                statRow(
+                        "arms measured",
+                        stats.candidateArms() + " vs " + stats.baselineArms() + " baseline",
+                        Theme.TEXT));
+        if (stats.msptDelta() != null) {
+            body.add(
+                    statRow(
+                            "mspt vs baseline",
+                            String.format(Locale.ROOT, "%+.1f", stats.msptDelta()),
+                            direction(stats.msptDelta(), true)));
+        }
+        if (stats.fpsDelta() != null) {
+            body.add(
+                    statRow(
+                            "fps vs baseline",
+                            String.format(Locale.ROOT, "%+.0f", stats.fpsDelta()),
+                            direction(stats.fpsDelta(), false)));
+        }
+        if (stats.msPerChunkDelta() != null) {
+            body.add(
+                    statRow(
+                            "ms/chunk vs baseline",
+                            String.format(Locale.ROOT, "%+.2f", stats.msPerChunkDelta()),
+                            direction(stats.msPerChunkDelta(), true)));
+        }
+
+        section.add(header);
+        section.add(body);
+        wireExpander(
+                header,
+                chevron,
+                body,
+                show -> {
+                    if (show) {
+                        collapsedLiveScenarios.remove(key);
+                    } else {
+                        collapsedLiveScenarios.add(key);
+                    }
+                });
+        return section;
     }
 
     /** One header-over-value column of a card's stats table. */
@@ -1091,9 +1222,9 @@ public final class RunnerWindow implements ExperimentListener {
                             direction(preliminary.msPerChunkDelta(), true)));
         }
         preliminary
-                .scenarioPercents()
+                .scenarios()
                 .forEach(
-                        (scenarioId, scenarioPercent) ->
+                        (scenarioId, stats) ->
                                 gridColumns.add(
                                         new StatColumn(
                                                 abbreviate(scenarioId),
@@ -1101,8 +1232,10 @@ public final class RunnerWindow implements ExperimentListener {
                                                         + ": scored improvement vs baseline"
                                                         + soFar,
                                                 String.format(
-                                                        Locale.ROOT, "%+.1f%%", scenarioPercent),
-                                                direction(scenarioPercent, false))));
+                                                        Locale.ROOT,
+                                                        "%+.1f%%",
+                                                        stats.improvementPercent()),
+                                                direction(stats.improvementPercent(), false))));
 
         return statsTable(gridColumns);
     }
@@ -1320,6 +1453,15 @@ public final class RunnerWindow implements ExperimentListener {
     /** Click the header, toggle the body; the chevron says which way it stands. */
     private static void wireExpander(
             javax.swing.JComponent header, JLabel chevron, javax.swing.JComponent body) {
+        wireExpander(header, chevron, body, unused -> {});
+    }
+
+    /** @param onToggle told the new state, for cards that remember it across rebuilds */
+    private static void wireExpander(
+            javax.swing.JComponent header,
+            JLabel chevron,
+            javax.swing.JComponent body,
+            java.util.function.Consumer<Boolean> onToggle) {
         header.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
         header.addMouseListener(
                 new java.awt.event.MouseAdapter() {
@@ -1328,6 +1470,7 @@ public final class RunnerWindow implements ExperimentListener {
                         boolean show = !body.isVisible();
                         body.setVisible(show);
                         chevron.setText(show ? "▾" : "▸");
+                        onToggle.accept(show);
                         body.getParent().revalidate();
                         body.getParent().repaint();
                     }

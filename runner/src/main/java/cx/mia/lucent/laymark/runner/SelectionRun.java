@@ -540,28 +540,43 @@ public final class SelectionRun {
         List<Measured> baseline =
                 measured.stream().filter(m -> m.armId().equals("baseline")).toList();
 
-        Map<String, Double> scenarioPercents = new LinkedHashMap<>();
+        Map<String, ExperimentListener.PreliminaryScenario> scenarios = new LinkedHashMap<>();
         for (String scenarioId :
                 measured.stream().map(Measured::scenarioId).distinct().sorted().toList()) {
-            double[] baselineMillis =
-                    baseline.stream()
-                            .filter(m -> m.scenarioId().equals(scenarioId))
-                            .mapToDouble(Measured::scoredMillis)
-                            .toArray();
-            double[] ownMillis =
-                    own.stream()
-                            .filter(m -> m.scenarioId().equals(scenarioId))
-                            .mapToDouble(Measured::scoredMillis)
-                            .toArray();
-            if (baselineMillis.length == 0 || ownMillis.length == 0) {
+            List<Measured> baselineScenario =
+                    baseline.stream().filter(m -> m.scenarioId().equals(scenarioId)).toList();
+            List<Measured> ownScenario =
+                    own.stream().filter(m -> m.scenarioId().equals(scenarioId)).toList();
+            if (baselineScenario.isEmpty() || ownScenario.isEmpty()) {
                 continue;
             }
             double baselineMean =
-                    java.util.Arrays.stream(baselineMillis).average().orElseThrow();
-            double ownMean = java.util.Arrays.stream(ownMillis).average().orElseThrow();
-            scenarioPercents.put(scenarioId, (baselineMean - ownMean) / baselineMean * 100.0);
+                    baselineScenario.stream()
+                            .mapToDouble(Measured::scoredMillis)
+                            .average()
+                            .orElseThrow();
+            double ownMean =
+                    ownScenario.stream()
+                            .mapToDouble(Measured::scoredMillis)
+                            .average()
+                            .orElseThrow();
+            Metrics ownMetrics = meanMetrics(ownScenario);
+            Metrics baselineMetrics = meanMetrics(baselineScenario);
+            scenarios.put(
+                    scenarioId,
+                    new ExperimentListener.PreliminaryScenario(
+                            (baselineMean - ownMean) / baselineMean * 100.0,
+                            delta(ownMetrics.mspt(), baselineMetrics.mspt()),
+                            delta(ownMetrics.fps(), baselineMetrics.fps()),
+                            delta(ownMetrics.msPerChunk(), baselineMetrics.msPerChunk()),
+                            (int) ownScenario.stream().map(Measured::sequence).distinct().count(),
+                            (int)
+                                    baselineScenario.stream()
+                                            .map(Measured::sequence)
+                                            .distinct()
+                                            .count()));
         }
-        if (scenarioPercents.isEmpty()) {
+        if (scenarios.isEmpty()) {
             return null;
         }
 
@@ -569,14 +584,14 @@ public final class SelectionRun {
         Metrics baselineMetrics = meanMetrics(baseline);
         return new ExperimentListener.Preliminary(
                 armId,
-                scenarioPercents.values().stream()
-                        .mapToDouble(Double::doubleValue)
+                scenarios.values().stream()
+                        .mapToDouble(ExperimentListener.PreliminaryScenario::improvementPercent)
                         .average()
                         .orElseThrow(),
                 delta(ownMetrics.mspt(), baselineMetrics.mspt()),
                 delta(ownMetrics.fps(), baselineMetrics.fps()),
                 delta(ownMetrics.msPerChunk(), baselineMetrics.msPerChunk()),
-                scenarioPercents);
+                scenarios);
     }
 
     /** Relative spread of this round's baseline runs on one scenario, as a percent; null below n=2. */

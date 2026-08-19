@@ -59,7 +59,7 @@ public interface ExperimentListener {
      * the real comparison.
      *
      * @param msptDelta candidate-mean minus baseline-mean, null where a channel had no data yet
-     * @param scenarioPercents per-scenario improvement so far, by scenario id
+     * @param scenarios per-scenario aggregates so far, by scenario id, in scenario order
      */
     record Preliminary(
             String id,
@@ -67,7 +67,19 @@ public interface ExperimentListener {
             Double msptDelta,
             Double fpsDelta,
             Double msPerChunkDelta,
-            java.util.Map<String, Double> scenarioPercents) {}
+            java.util.Map<String, PreliminaryScenario> scenarios) {}
+
+    /**
+     * One scenario's running aggregate for one candidate: the scored percent and every metric
+     * channel, plus how many arms fed each side — the count is what says how preliminary this is.
+     */
+    record PreliminaryScenario(
+            double improvementPercent,
+            Double msptDelta,
+            Double fpsDelta,
+            Double msPerChunkDelta,
+            int candidateArms,
+            int baselineArms) {}
 
     default void preliminaryScore(Preliminary preliminary) {}
 
