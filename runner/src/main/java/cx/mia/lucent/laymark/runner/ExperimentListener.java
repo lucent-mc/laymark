@@ -45,6 +45,22 @@ public interface ExperimentListener {
     /** The arm currently in flight has begun this scenario. */
     default void scenarioStarted(String scenarioId, int repetition) {}
 
+    /**
+     * One scenario's numbers, streamed the moment its capture closed — mid-arm, hours before the
+     * arm's result file. The result file stays authoritative; this is the same extraction
+     * ({@code Channels}) arriving early.
+     */
+    record LiveSample(
+            String scenarioId,
+            int repetition,
+            boolean warm,
+            double scoredMillis,
+            Double mspt,
+            Double fps,
+            Double msPerChunk) {}
+
+    default void scenarioMeasured(LiveSample sample) {}
+
     /** @param scoredMillis the run's scored metric, averaged across scenarios; 0 when it failed */
     default void runFinished(int sequence, Arm arm, double scoredMillis, boolean failed) {}
 

@@ -78,6 +78,7 @@ public final class FrameCodec {
         register("scenario-started", Frame.ScenarioStarted.class);
         register("phase-entered", Frame.PhaseEntered.class);
         register("scenario-finished", Frame.ScenarioFinished.class);
+        register("scenario-measured", Frame.ScenarioMeasured.class);
         register("run-failed", Frame.RunFailed.class);
         register("run-finished", Frame.RunFinished.class);
     }

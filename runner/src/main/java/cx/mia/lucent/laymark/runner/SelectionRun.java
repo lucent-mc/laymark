@@ -195,6 +195,48 @@ public final class SelectionRun {
                                     plan.window(),
                                     plan.scenarios(),
                                     armOutput.toString());
+                    // Candidate arms stream: each warm capture the game finishes becomes a
+                    // provisional Measured immediately, and the preliminary aggregate updates
+                    // per scenario instead of once per arm. Transient by design -- the arm's
+                    // result file re-derives the same numbers authoritatively below.
+                    List<Measured> streamed =
+                            java.util.Collections.synchronizedList(new ArrayList<>());
+                    int armSequence = sequence;
+                    ExperimentListener tap =
+                            arm.kind() != Arm.Kind.CANDIDATE
+                                    ? listener
+                                    : new ExperimentListener() {
+                                        @Override
+                                        public void scenarioStarted(
+                                                String scenarioId, int repetition) {
+                                            listener.scenarioStarted(scenarioId, repetition);
+                                        }
+
+                                        @Override
+                                        public void scenarioMeasured(
+                                                ExperimentListener.LiveSample sample) {
+                                            if (!sample.warm()) {
+                                                return; // cold is context, not score
+                                            }
+                                            streamed.add(
+                                                    new Measured(
+                                                            arm.id(),
+                                                            armSequence,
+                                                            sample.scenarioId(),
+                                                            sample.scoredMillis(),
+                                                            new Metrics(
+                                                                    sample.mspt(),
+                                                                    sample.fps(),
+                                                                    sample.msPerChunk())));
+                                            List<Measured> combined = new ArrayList<>(measured);
+                                            combined.addAll(streamed);
+                                            ExperimentListener.Preliminary live =
+                                                    preliminary(arm.id(), combined);
+                                            if (live != null) {
+                                                listener.preliminaryScore(live);
+                                            }
+                                        }
+                                    };
                     RunResult result;
                     try {
                         result =
@@ -205,7 +247,7 @@ public final class SelectionRun {
                                         sceneRoot,
                                         timeoutPerRun,
                                         control,
-                                        listener);
+                                        tap);
                     } catch (RuntimeException e) {
                         if (control.stopping()) {
                             listener.runFinished(sequence, arm, 0, true);
@@ -244,7 +286,9 @@ public final class SelectionRun {
                         if (scenario.pass() == cx.mia.lucent.laymark.core.result.Pass.COLD) {
                             continue;
                         }
-                        double scored = ExperimentRun.scored(scenario, plan);
+                        var channels =
+                                cx.mia.lucent.laymark.core.result.Channels.of(scenario, plan);
+                        double scored = channels.scoredMillis();
                         total += scored;
                         counted++;
                         measured.add(
@@ -253,7 +297,10 @@ public final class SelectionRun {
                                         sequence,
                                         scenario.scenarioId(),
                                         scored,
-                                        metricsOf(scenario)));
+                                        new Metrics(
+                                                channels.mspt(),
+                                                channels.fps(),
+                                                channels.msPerChunk())));
                         if (arm.kind() == Arm.Kind.BASELINE) {
                             baselineRuns.add(
                                     new Comparison.Run(arm.id(), sequence, scored, true));
@@ -517,15 +564,6 @@ public final class SelectionRun {
             total += schedule.expand(dummies, baseline, acclimation, inRound != candidates).size();
         }
         return total;
-    }
-
-    private static Metrics metricsOf(ScenarioResult scenario) {
-        var segment = scenario.segments().get(scenario.segments().size() - 1);
-        var spark = segment.measurement().spark();
-        return new Metrics(
-                spark == null ? null : spark.millisPerTickMean(),
-                segment.summaries().interval().meanFramesPerSecond(),
-                segment.summaries().millisPerChunkReceived());
     }
 
     /**

@@ -169,6 +169,22 @@ public final class HarnessRun {
         try {
             ScenarioResult result =
                     measure(scenario, repetition, pass, position, world, owns, startedAt);
+            if (result.outcome() != ScenarioResult.Outcome.FAILED) {
+                try {
+                    var channels = cx.mia.lucent.laymark.core.result.Channels.of(result, plan);
+                    events.accept(
+                            new Frame.ScenarioMeasured(
+                                    scenario.id(),
+                                    repetition,
+                                    pass.name(),
+                                    channels.scoredMillis(),
+                                    channels.mspt(),
+                                    channels.fps(),
+                                    channels.msPerChunk()));
+                } catch (RuntimeException statsUnavailable) {
+                    // Streaming is a courtesy; the result file remains the authoritative record.
+                }
+            }
             events.accept(
                     new Frame.ScenarioFinished(
                             scenario.id(),

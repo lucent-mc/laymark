@@ -162,6 +162,17 @@ public final class BenchmarkRun {
                                                         listener.scenarioStarted(
                                                                 started.scenarioId(), started.repetition());
                                                     }
+                                                    if (frame instanceof Frame.ScenarioMeasured m) {
+                                                        listener.scenarioMeasured(
+                                                                new ExperimentListener.LiveSample(
+                                                                        m.scenarioId(),
+                                                                        m.repetition(),
+                                                                        "WARM".equals(m.pass()),
+                                                                        m.scoredMillis(),
+                                                                        m.mspt(),
+                                                                        m.fps(),
+                                                                        m.msPerChunk()));
+                                                    }
                                                     if (frame instanceof Frame.RunFinished
                                                             || frame instanceof Frame.RunFailed) {
                                                         terminal.set(frame);
