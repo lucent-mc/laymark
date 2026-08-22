@@ -50,6 +50,7 @@ public sealed interface Frame {
      *
      * @param pass the {@code Pass} name; cold passes are context, warm passes are the score
      * @param scoredMillis the scenario's scored metric under the plan's stop condition
+     * @param heapUsedMegabytes retained heap after the capture's post-window collection
      */
     record ScenarioMeasured(
             String scenarioId,
@@ -58,7 +59,8 @@ public sealed interface Frame {
             double scoredMillis,
             Double mspt,
             Double fps,
-            Double msPerChunk)
+            Double msPerChunk,
+            Double heapUsedMegabytes)
             implements Frame {}
 
     /** Terminal, unsuccessful. */

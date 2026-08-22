@@ -97,6 +97,7 @@ public final class ExperimentRun {
                                 plan.runId(),
                                 plan.protocolVersion(),
                                 plan.window(),
+                                plan.scoreWeights(),
                                 plan.scenarios(),
                                 armOutput.toString());
                 RunResult result;

@@ -123,6 +123,13 @@ public interface HarnessPort {
     boolean targetHasNoBuiltSections(Pose pose);
 
     /**
+     * Moves away from a streaming target when reopening a dependency left the player there.
+     * Returns only once the target contains no client chunks, so the measured teleport starts
+     * from the same zero-work state in every arm.
+     */
+    default void prepareForStreaming(Pose target, int viewDistance) {}
+
+    /**
      * Why terrain pre-generation is unavailable, or null when {@link #pregenerate} can be used.
      *
      * <p>Pre-generation is what lets a streaming scenario stand alone: without it, terrain can
@@ -177,6 +184,14 @@ public interface HarnessPort {
      * can be waited on in between.
      */
     void beginCapture();
+
+    /**
+     * Opens a capture and snapshots pose-local chunk occupancy before a measured teleport.
+     * Implementations that do not expose chunk progress may use the default for non-CHUNKS tests.
+     */
+    default void beginCapture(StopCondition stop, Pose around, int viewDistance) {
+        beginCapture();
+    }
 
     /** Closes a window opened by {@link #beginCapture}. */
     Measurement endCapture();

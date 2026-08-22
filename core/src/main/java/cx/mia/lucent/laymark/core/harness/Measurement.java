@@ -21,6 +21,8 @@ import java.util.List;
  * @param spark server health as Spark measures it — the channel that catches a mod costing
  *     nothing to draw and a great deal to simulate. Null when Spark is not installed, which is
  *     recorded as a run-level flag rather than treated as a failure.
+ * @param clientChunksReceived pose-local chunks present when a CHUNKS target completed. Unlike
+ *     global client-cache occupancy, this does not lose arrivals when old chunks unload.
  */
 public record Measurement(
         List<FrameSample> frames,
@@ -29,7 +31,8 @@ public record Measurement(
         WorkCounters workBefore,
         WorkCounters workAfter,
         MemorySnapshot memoryBefore,
-        MemorySnapshot memoryAfter) {
+        MemorySnapshot memoryAfter,
+        Long clientChunksReceived) {
 
     public Measurement {
         frames = frames == null ? List.of() : List.copyOf(frames);
@@ -37,7 +40,7 @@ public record Measurement(
     }
 
     public static Measurement empty() {
-        return new Measurement(List.of(), List.of(), null, null, null, null, null);
+        return new Measurement(List.of(), List.of(), null, null, null, null, null, null);
     }
 
     /**
@@ -47,7 +50,8 @@ public record Measurement(
      */
     public Measurement withoutSamples() {
         return new Measurement(
-                List.of(), List.of(), spark, workBefore, workAfter, memoryBefore, memoryAfter);
+                List.of(), List.of(), spark, workBefore, workAfter, memoryBefore, memoryAfter,
+                clientChunksReceived);
     }
 
     /** The scored distribution. */
@@ -79,12 +83,33 @@ public record Measurement(
      * @return null when no chunks arrived, which is the normal case for a resident-render scenario
      */
     public Double millisPerChunkReceived() {
-        WorkCounters delta = work();
-        if (delta == null || delta.clientChunks() <= 0 || frames.isEmpty()) {
+        if (frames.isEmpty()) {
+            return null;
+        }
+        Long received = clientChunksReceived;
+        if (received == null) {
+            // Compatibility for measurements written before the pose-local completion counter
+            // was retained. New captures never use global occupancy as an arrival count.
+            WorkCounters delta = work();
+            received = delta == null ? null : (long) delta.clientChunks();
+        }
+        if (received == null || received <= 0) {
             return null;
         }
         long total = frames.stream().mapToLong(FrameSample::intervalNanos).sum();
-        return total / 1_000_000d / delta.clientChunks();
+        return total / 1_000_000d / received;
+    }
+
+    /** Source-compatible shape from before pose-local chunk completion was retained. */
+    public Measurement(
+            List<FrameSample> frames,
+            List<GpuSample> gpu,
+            SparkStatistics spark,
+            WorkCounters workBefore,
+            WorkCounters workAfter,
+            MemorySnapshot memoryBefore,
+            MemorySnapshot memoryAfter) {
+        this(frames, gpu, spark, workBefore, workAfter, memoryBefore, memoryAfter, null);
     }
 
     /**

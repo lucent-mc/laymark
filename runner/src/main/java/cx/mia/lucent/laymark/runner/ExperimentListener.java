@@ -57,7 +57,19 @@ public interface ExperimentListener {
             double scoredMillis,
             Double mspt,
             Double fps,
-            Double msPerChunk) {}
+            Double msPerChunk,
+            Double heapUsedMegabytes) {
+        public LiveSample(
+                String scenarioId,
+                int repetition,
+                boolean warm,
+                double scoredMillis,
+                Double mspt,
+                Double fps,
+                Double msPerChunk) {
+            this(scenarioId, repetition, warm, scoredMillis, mspt, fps, msPerChunk, null);
+        }
+    }
 
     default void scenarioMeasured(LiveSample sample) {}
 
@@ -82,7 +94,17 @@ public interface ExperimentListener {
             double improvementPercent,
             Double msptDelta,
             Double fpsDelta,
-            java.util.Map<String, PreliminaryScenario> scenarios) {}
+            Double heapUsedMegabytesDelta,
+            java.util.Map<String, PreliminaryScenario> scenarios) {
+        public Preliminary(
+                String id,
+                double improvementPercent,
+                Double msptDelta,
+                Double fpsDelta,
+                java.util.Map<String, PreliminaryScenario> scenarios) {
+            this(id, improvementPercent, msptDelta, fpsDelta, null, scenarios);
+        }
+    }
 
     /**
      * One scenario's running aggregate for one candidate: the scored percent and every metric
@@ -93,13 +115,40 @@ public interface ExperimentListener {
             Double msptDelta,
             Double fpsDelta,
             Double msPerChunkDelta,
+            Double heapUsedMegabytesDelta,
             int candidateArms,
-            int baselineArms) {}
+            int baselineArms) {
+        public PreliminaryScenario(
+                double improvementPercent,
+                Double msptDelta,
+                Double fpsDelta,
+                Double msPerChunkDelta,
+                int candidateArms,
+                int baselineArms) {
+            this(
+                    improvementPercent,
+                    msptDelta,
+                    fpsDelta,
+                    msPerChunkDelta,
+                    null,
+                    candidateArms,
+                    baselineArms);
+        }
+    }
 
     default void preliminaryScore(Preliminary preliminary) {}
 
     /** One scenario's metric channels for one candidate, as candidate-mean minus baseline-mean. */
-    record ScenarioChannels(Double msptDelta, Double fpsDelta, Double msPerChunkDelta) {}
+    record ScenarioChannels(
+            Double msptDelta,
+            Double fpsDelta,
+            Double msPerChunkDelta,
+            Double heapUsedMegabytesDelta) {
+        public ScenarioChannels(
+                Double msptDelta, Double fpsDelta, Double msPerChunkDelta) {
+            this(msptDelta, fpsDelta, msPerChunkDelta, null);
+        }
+    }
 
     /**
      * One candidate's round in summary: the score a card leads with, the metric deltas beneath it,
@@ -117,6 +166,7 @@ public interface ExperimentListener {
             double score,
             Double msptDelta,
             Double fpsDelta,
+            Double heapUsedMegabytesDelta,
             Double vsOriginalPercent,
             String verdict,
             String detail,
@@ -127,6 +177,27 @@ public interface ExperimentListener {
                     scenarioChannels == null ? java.util.Map.of() : Map.copyOf(scenarioChannels);
         }
 
+        public CandidateScore(
+                String id,
+                double score,
+                Double msptDelta,
+                Double fpsDelta,
+                Double vsOriginalPercent,
+                String verdict,
+                String detail,
+                java.util.Map<String, ScenarioChannels> scenarioChannels) {
+            this(
+                    id,
+                    score,
+                    msptDelta,
+                    fpsDelta,
+                    null,
+                    vsOriginalPercent,
+                    verdict,
+                    detail,
+                    scenarioChannels);
+        }
+
         public String describe() {
             StringBuilder text = new StringBuilder(id);
             text.append(String.format(java.util.Locale.ROOT, "  score %+.1f", score));
@@ -135,6 +206,13 @@ public interface ExperimentListener {
             }
             if (fpsDelta != null) {
                 text.append(String.format(java.util.Locale.ROOT, "  fps %+.0f", fpsDelta));
+            }
+            if (heapUsedMegabytesDelta != null) {
+                text.append(
+                        String.format(
+                                java.util.Locale.ROOT,
+                                "  heap %+.0f MiB",
+                                heapUsedMegabytesDelta));
             }
             if (vsOriginalPercent != null) {
                 text.append(

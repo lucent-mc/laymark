@@ -20,6 +20,7 @@ import java.util.List;
  * @param stopCondition how the scenario ends, and therefore its scored metric
  * @param repetitions how many times the scenario repeats within a single arm run. Distinct from
  *     the schedule template, which governs how arm runs are ordered.
+ * @param weight operator relevance multiplier in both speed and memory objectives
  * @param preset the graphics settings to pin before the world loads
  * @param pose where the player is placed and what it looks at
  * @param seed the world seed; identical across arms, or the comparison is between landscapes
@@ -34,6 +35,7 @@ public record ScenarioSpec(
         List<String> dependsOn,
         StopCondition stopCondition,
         int repetitions,
+        double weight,
         Preset preset,
         Pose pose,
         long seed,
@@ -51,6 +53,10 @@ public record ScenarioSpec(
         if (repetitions < 1) {
             throw new PlanException(
                     "scenario " + id + " needs at least one repetition, got " + repetitions);
+        }
+        if (!Double.isFinite(weight) || weight < 0) {
+            throw new PlanException(
+                    "scenario " + id + " weight must be a finite non-negative number");
         }
         if (preset == null) {
             throw new PlanException("scenario " + id + " needs a preset");
@@ -115,12 +121,39 @@ public record ScenarioSpec(
                 dependsOn,
                 stopCondition,
                 repetitions,
+                1.0,
                 Preset.empty(),
                 DEFAULT_POSE,
                 0L,
                 List.of(Phase.RESIDENT_RENDER),
                 false,
                 List.of());
+    }
+
+    /** Source-compatible shape from before per-scenario relevance weights were configurable. */
+    public ScenarioSpec(
+            String id,
+            List<String> dependsOn,
+            StopCondition stopCondition,
+            int repetitions,
+            Preset preset,
+            Pose pose,
+            long seed,
+            List<Phase> measure,
+            boolean generateStructures,
+            List<ScenePlacement> content) {
+        this(
+                id,
+                dependsOn,
+                stopCondition,
+                repetitions,
+                1.0,
+                preset,
+                pose,
+                seed,
+                measure,
+                generateStructures,
+                content);
     }
 
     /** High enough to be clear of terrain at any elevation vanilla generates. */

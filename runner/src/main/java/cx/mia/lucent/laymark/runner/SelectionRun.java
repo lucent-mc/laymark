@@ -5,12 +5,14 @@ import cx.mia.lucent.laymark.core.experiment.Schedule;
 import cx.mia.lucent.laymark.core.materialize.InstanceState;
 import cx.mia.lucent.laymark.core.materialize.Materialization;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
+import cx.mia.lucent.laymark.core.plan.ScoreWeights;
 import cx.mia.lucent.laymark.core.report.MarkdownReport;
 import cx.mia.lucent.laymark.core.report.ReportCodec;
 import cx.mia.lucent.laymark.core.report.SelectionReport;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.core.result.ScenarioResult;
 import cx.mia.lucent.laymark.core.select.BandGate;
+import cx.mia.lucent.laymark.core.select.CompositeScore;
 import cx.mia.lucent.laymark.core.select.Bundle;
 import cx.mia.lucent.laymark.core.select.DependencyGraph;
 import cx.mia.lucent.laymark.core.select.Selection;
@@ -77,7 +79,12 @@ public final class SelectionRun {
     }
 
     /** The channels a candidate card summarises; null where the machine could not measure one. */
-    private record Metrics(Double mspt, Double fps, Double msPerChunk) {}
+    private record Metrics(
+            Double mspt, Double fps, Double msPerChunk, Double heapUsedMegabytes) {
+        private Metrics(Double mspt, Double fps, Double msPerChunk) {
+            this(mspt, fps, msPerChunk, null);
+        }
+    }
 
     private record Measured(
             String armId, int sequence, String scenarioId, double scoredMillis, Metrics metrics) {}
@@ -221,6 +228,7 @@ public final class SelectionRun {
                                     plan.runId(),
                                     plan.protocolVersion(),
                                     plan.window(),
+                                    plan.scoreWeights(),
                                     plan.scenarios(),
                                     armOutput.toString());
                     // Candidate arms stream: each warm capture the game finishes becomes a
@@ -255,11 +263,12 @@ public final class SelectionRun {
                                                             new Metrics(
                                                                     sample.mspt(),
                                                                     sample.fps(),
-                                                                    sample.msPerChunk())));
+                                                                    sample.msPerChunk(),
+                                                                    sample.heapUsedMegabytes())));
                                             List<Measured> combined = new ArrayList<>(measured);
                                             combined.addAll(streamed);
                                             ExperimentListener.Preliminary live =
-                                                    preliminary(arm.id(), combined);
+                                                    preliminary(arm.id(), combined, plan);
                                             if (live != null) {
                                                 listener.preliminaryScore(live);
                                             }
@@ -331,8 +340,21 @@ public final class SelectionRun {
                         if (scenario.pass() == cx.mia.lucent.laymark.core.result.Pass.COLD) {
                             continue;
                         }
-                        var channels =
-                                cx.mia.lucent.laymark.core.result.Channels.of(scenario, plan);
+                        cx.mia.lucent.laymark.core.result.Channels channels;
+                        try {
+                            channels =
+                                    cx.mia.lucent.laymark.core.result.Channels.of(scenario, plan);
+                        } catch (cx.mia.lucent.laymark.core.harness.HarnessException invalid) {
+                            trustFlags.add(
+                                    String.format(
+                                            "%03d-%s %s#%d: voided: %s",
+                                            sequence,
+                                            arm.id(),
+                                            scenario.scenarioId(),
+                                            scenario.repetition(),
+                                            invalid.getMessage()));
+                            continue;
+                        }
                         double scored = channels.scoredMillis();
                         total += scored;
                         counted++;
@@ -345,13 +367,14 @@ public final class SelectionRun {
                                         new Metrics(
                                                 channels.mspt(),
                                                 channels.fps(),
-                                                channels.msPerChunk())));
+                                                channels.msPerChunk(),
+                                                channels.heapUsedMegabytes())));
                     }
                     listener.runFinished(
                             sequence, arm, counted == 0 ? 0 : total / counted, counted == 0);
                     if (arm.kind() == Arm.Kind.CANDIDATE) {
                         ExperimentListener.Preliminary preliminary =
-                                preliminary(arm.id(), measured);
+                                preliminary(arm.id(), measured, plan);
                         if (preliminary != null) {
                             listener.preliminaryScore(preliminary);
                         }
@@ -387,7 +410,10 @@ public final class SelectionRun {
 
                 Map<String, List<Comparison>> byCandidate =
                         compare(bundles, measured, voids, profile);
+                Map<String, List<Comparison>> memoryByCandidate =
+                        compareMemory(bundles, measured, voids);
                 byCandidate.values().forEach(allComparisons::addAll);
+                memoryByCandidate.values().forEach(allComparisons::addAll);
 
                 // Score against the ORIGINAL baseline too, from round 2 on: the current round's
                 // comparison says what the candidate adds to the grown stack, and only the
@@ -399,15 +425,23 @@ public final class SelectionRun {
                 Map<String, Double> vsOriginal =
                         round == 1
                                 ? Map.of()
-                                : scoreAgainst(bundles, measured, originalBaseline, voids);
+                                : scoreAgainst(
+                                        bundles, measured, originalBaseline, voids, plan);
 
-                BandGate gate = new BandGate(byCandidate);
+                Map<String, List<Comparison>> gateComparisons =
+                        activeComparisons(byCandidate, memoryByCandidate, plan);
+                BandGate gate = new BandGate(gateComparisons);
                 Selection.Ranking ranking =
                         bundle ->
-                                byCandidate.getOrDefault(bundle.candidate(), List.of()).isEmpty()
+                                gateComparisons
+                                                .getOrDefault(bundle.candidate(), List.of())
+                                                .isEmpty()
                                         ? Double.NEGATIVE_INFINITY
-                                        : BandGate.weightedScore(
-                                                byCandidate.get(bundle.candidate()), Map.of());
+                                        : compositeScore(
+                                                bundle.candidate(),
+                                                byCandidate,
+                                                memoryByCandidate,
+                                                plan);
                 List<Selection.Outcome> outcomes = selection.round(remaining, gate, ranking);
 
                 String promoted =
@@ -418,11 +452,22 @@ public final class SelectionRun {
                                 .orElse(null);
 
                 List<ExperimentListener.CandidateScore> scores =
-                        summarise(outcomes, byCandidate, measured, vsOriginal);
+                        summarise(
+                                outcomes,
+                                byCandidate,
+                                memoryByCandidate,
+                                measured,
+                                vsOriginal,
+                                plan);
                 List<Comparison> roundComparisons =
-                        byCandidate.values().stream().flatMap(List::stream).toList();
+                        java.util.stream.Stream.concat(
+                                        byCandidate.values().stream().flatMap(List::stream),
+                                        memoryByCandidate.values().stream().flatMap(List::stream))
+                                .toList();
                 listener.roundCompleted(round, baselineLabel, roundComparisons, scores, promoted);
-                roundHistory.add(historyOf(round, outcomes, byCandidate));
+                roundHistory.add(
+                        historyOf(
+                                round, outcomes, byCandidate, memoryByCandidate, plan));
 
                 for (var score : scores) {
                     System.out.printf("  %s%n", score.describe());
@@ -631,7 +676,7 @@ public final class SelectionRun {
      * faster, matching how improvements read everywhere else.
      */
     private static ExperimentListener.Preliminary preliminary(
-            String armId, List<Measured> measured) {
+            String armId, List<Measured> measured, RunPlan plan) {
         List<Measured> own = measured.stream().filter(m -> m.armId().equals(armId)).toList();
         List<Measured> baseline =
                 measured.stream().filter(m -> m.armId().equals(BASELINE_ARM)).toList();
@@ -665,6 +710,9 @@ public final class SelectionRun {
                             delta(ownMetrics.mspt(), baselineMetrics.mspt()),
                             delta(ownMetrics.fps(), baselineMetrics.fps()),
                             delta(ownMetrics.msPerChunk(), baselineMetrics.msPerChunk()),
+                            delta(
+                                    ownMetrics.heapUsedMegabytes(),
+                                    baselineMetrics.heapUsedMegabytes()),
                             (int) ownScenario.stream().map(Measured::sequence).distinct().count(),
                             (int)
                                     baselineScenario.stream()
@@ -678,14 +726,53 @@ public final class SelectionRun {
 
         Metrics ownMetrics = meanMetrics(own);
         Metrics baselineMetrics = meanMetrics(baseline);
+        double speedTotal = 0;
+        double speedCost = 0;
+        double memoryTotal = 0;
+        double memoryCost = 0;
+        Map<String, Double> relevance = scenarioWeights(plan);
+        for (var entry : scenarios.entrySet()) {
+            String scenarioId = entry.getKey();
+            var stats = entry.getValue();
+            double scenarioWeight = relevance.getOrDefault(scenarioId, 1.0);
+            List<Measured> baselineScenario =
+                    baseline.stream().filter(m -> m.scenarioId().equals(scenarioId)).toList();
+            double baselineSpeed =
+                    baselineScenario.stream()
+                            .mapToDouble(Measured::scoredMillis)
+                            .average()
+                            .orElseThrow();
+            speedTotal += stats.improvementPercent() * baselineSpeed * scenarioWeight;
+            speedCost += baselineSpeed * scenarioWeight;
+
+            Double baselineHeap = meanMetrics(baselineScenario).heapUsedMegabytes();
+            if (baselineHeap != null && stats.heapUsedMegabytesDelta() != null) {
+                double heapImprovement =
+                        -stats.heapUsedMegabytesDelta() / baselineHeap * 100.0;
+                memoryTotal += heapImprovement * baselineHeap * scenarioWeight;
+                memoryCost += baselineHeap * scenarioWeight;
+            }
+        }
+        Double speedScore = speedCost == 0 ? null : speedTotal / speedCost;
+        Double memoryScore = memoryCost == 0 ? null : memoryTotal / memoryCost;
+        double objectiveTotal = 0;
+        double objectiveWeight = 0;
+        if (speedScore != null && plan.scoreWeights().speed() > 0) {
+            objectiveTotal += speedScore * plan.scoreWeights().speed();
+            objectiveWeight += plan.scoreWeights().speed();
+        }
+        if (memoryScore != null && plan.scoreWeights().memory() > 0) {
+            objectiveTotal += memoryScore * plan.scoreWeights().memory();
+            objectiveWeight += plan.scoreWeights().memory();
+        }
         return new ExperimentListener.Preliminary(
                 armId,
-                scenarios.values().stream()
-                        .mapToDouble(ExperimentListener.PreliminaryScenario::improvementPercent)
-                        .average()
-                        .orElseThrow(),
+                objectiveWeight == 0 ? 0 : objectiveTotal / objectiveWeight,
                 delta(ownMetrics.mspt(), baselineMetrics.mspt()),
                 delta(ownMetrics.fps(), baselineMetrics.fps()),
+                delta(
+                        ownMetrics.heapUsedMegabytes(),
+                        baselineMetrics.heapUsedMegabytes()),
                 scenarios);
     }
 
@@ -754,16 +841,139 @@ public final class SelectionRun {
         return byCandidate;
     }
 
+    /** Retained heap uses the same paired schedule, but not the speed machine profile. */
+    private static Map<String, List<Comparison>> compareMemory(
+            List<Bundle> bundles,
+            List<Measured> measured,
+            List<Drift.VoidWindow> voids) {
+        Map<String, List<Comparison>> byCandidate = new LinkedHashMap<>();
+        for (Bundle bundle : bundles) {
+            List<Comparison> comparisons = new ArrayList<>();
+            for (String scenarioId : scenarioIds(measured)) {
+                List<Comparison.Run> baseline =
+                        metricRuns(
+                                measured,
+                                BASELINE_ARM,
+                                scenarioId,
+                                m -> m.metrics().heapUsedMegabytes(),
+                                voids);
+                List<Comparison.Run> candidate =
+                        metricRuns(
+                                measured,
+                                bundle.candidate(),
+                                scenarioId,
+                                m -> m.metrics().heapUsedMegabytes(),
+                                voids);
+                if (baseline.isEmpty() || candidate.size() < 2) {
+                    continue;
+                }
+                comparisons.add(
+                        Comparison.of(
+                                bundle.candidate(),
+                                scenarioId,
+                                Comparison.Metric.MEMORY,
+                                baseline,
+                                candidate,
+                                Comparison.DEFAULT_FLOOR_PERCENT));
+            }
+            if (!comparisons.isEmpty()) {
+                byCandidate.put(bundle.candidate(), comparisons);
+            }
+        }
+        return byCandidate;
+    }
+
+    private static List<Comparison.Run> metricRuns(
+            List<Measured> measured,
+            String armId,
+            String scenarioId,
+            java.util.function.Function<Measured, Double> metric,
+            List<Drift.VoidWindow> voids) {
+        return measured.stream()
+                .filter(m -> m.armId().equals(armId))
+                .filter(m -> m.scenarioId().equals(scenarioId))
+                .filter(m -> metric.apply(m) != null)
+                .map(
+                        m ->
+                                flagged(
+                                        new Comparison.Run(
+                                                m.armId(),
+                                                m.sequence(),
+                                                metric.apply(m),
+                                                true),
+                                        voids))
+                .toList();
+    }
+
+    private static Map<String, List<Comparison>> activeComparisons(
+            Map<String, List<Comparison>> speed,
+            Map<String, List<Comparison>> memory,
+            RunPlan plan) {
+        Map<String, List<Comparison>> active = new LinkedHashMap<>();
+        ScoreWeights weights = plan.scoreWeights();
+        Map<String, Double> relevance = scenarioWeights(plan);
+        java.util.stream.Stream.concat(speed.keySet().stream(), memory.keySet().stream())
+                .distinct()
+                .forEach(
+                        candidate -> {
+                            List<Comparison> comparisons = new ArrayList<>();
+                            if (weights.speed() > 0) {
+                                comparisons.addAll(
+                                        speed.getOrDefault(candidate, List.of()).stream()
+                                                .filter(
+                                                        c ->
+                                                                relevance.getOrDefault(
+                                                                                c.scenarioId(), 1.0)
+                                                                        > 0)
+                                                .toList());
+                            }
+                            if (weights.memory() > 0) {
+                                comparisons.addAll(
+                                        memory.getOrDefault(candidate, List.of()).stream()
+                                                .filter(
+                                                        c ->
+                                                                relevance.getOrDefault(
+                                                                                c.scenarioId(), 1.0)
+                                                                        > 0)
+                                                .toList());
+                            }
+                            if (!comparisons.isEmpty()) {
+                                active.put(candidate, List.copyOf(comparisons));
+                            }
+                        });
+        return active;
+    }
+
+    private static double compositeScore(
+            String candidate,
+            Map<String, List<Comparison>> speed,
+            Map<String, List<Comparison>> memory,
+            RunPlan plan) {
+        return CompositeScore.of(
+                speed.getOrDefault(candidate, List.of()),
+                memory.getOrDefault(candidate, List.of()),
+                scenarioWeights(plan),
+                plan.scoreWeights());
+    }
+
+    private static Map<String, Double> scenarioWeights(RunPlan plan) {
+        Map<String, Double> weights = new LinkedHashMap<>();
+        plan.scenarios().forEach(scenario -> weights.put(scenario.id(), scenario.weight()));
+        return weights;
+    }
+
     /** Weighted score of each candidate against the run's first baseline, for the vs-original row. */
     private static Map<String, Double> scoreAgainst(
             List<Bundle> bundles,
             List<Measured> measured,
             List<Measured> originalBaseline,
-            List<Drift.VoidWindow> voids) {
+            List<Drift.VoidWindow> voids,
+            RunPlan plan) {
 
         Map<String, Double> scores = new LinkedHashMap<>();
         for (Bundle bundle : bundles) {
-            List<Comparison> comparisons = new ArrayList<>();
+            List<Comparison> speed = new ArrayList<>();
+            List<Comparison> memory = new ArrayList<>();
             for (String scenarioId : scenarioIds(originalBaseline)) {
                 List<Comparison.Run> baseline = baselineRunsFor(originalBaseline, scenarioId);
                 List<Comparison.Run> candidate =
@@ -781,19 +991,50 @@ public final class SelectionRun {
                                                         voids))
                                 .toList();
                 if (baseline.isEmpty() || candidate.size() < 2) {
-                    continue;
+                    // Memory can still be available even when a speed result was voided.
+                } else {
+                    speed.add(
+                            Comparison.of(
+                                    bundle.candidate(),
+                                    scenarioId,
+                                    baseline,
+                                    candidate,
+                                    Comparison.DEFAULT_FLOOR_PERCENT));
                 }
-                comparisons.add(
-                        Comparison.of(
+
+                List<Comparison.Run> baselineMemory =
+                        metricRuns(
+                                originalBaseline,
+                                BASELINE_ARM,
+                                scenarioId,
+                                m -> m.metrics().heapUsedMegabytes(),
+                                List.of());
+                List<Comparison.Run> candidateMemory =
+                        metricRuns(
+                                measured,
                                 bundle.candidate(),
                                 scenarioId,
-                                baseline,
-                                candidate,
-                                Comparison.DEFAULT_FLOOR_PERCENT));
+                                m -> m.metrics().heapUsedMegabytes(),
+                                voids);
+                if (!baselineMemory.isEmpty() && candidateMemory.size() >= 2) {
+                    memory.add(
+                            Comparison.of(
+                                    bundle.candidate(),
+                                    scenarioId,
+                                    Comparison.Metric.MEMORY,
+                                    baselineMemory,
+                                    candidateMemory,
+                                    Comparison.DEFAULT_FLOOR_PERCENT));
+                }
             }
-            if (!comparisons.isEmpty()) {
+            if (!speed.isEmpty() || !memory.isEmpty()) {
                 scores.put(
-                        bundle.candidate(), BandGate.weightedScore(comparisons, Map.of()));
+                        bundle.candidate(),
+                        CompositeScore.of(
+                                speed,
+                                memory,
+                                scenarioWeights(plan),
+                                plan.scoreWeights()));
             }
         }
         return scores;
@@ -802,8 +1043,10 @@ public final class SelectionRun {
     private static List<ExperimentListener.CandidateScore> summarise(
             List<Selection.Outcome> outcomes,
             Map<String, List<Comparison>> byCandidate,
+            Map<String, List<Comparison>> memoryByCandidate,
             List<Measured> measured,
-            Map<String, Double> vsOriginal) {
+            Map<String, Double> vsOriginal,
+            RunPlan plan) {
 
         List<Measured> baselineMeasured =
                 measured.stream().filter(m -> m.armId().equals(BASELINE_ARM)).toList();
@@ -812,7 +1055,6 @@ public final class SelectionRun {
         List<ExperimentListener.CandidateScore> scores = new ArrayList<>();
         for (Selection.Outcome outcome : outcomes) {
             String id = outcome.bundle().candidate();
-            List<Comparison> comparisons = byCandidate.getOrDefault(id, List.of());
             List<Measured> ownMeasured =
                     measured.stream().filter(m -> m.armId().equals(id)).toList();
             Metrics own = meanMetrics(ownMeasured);
@@ -839,30 +1081,67 @@ public final class SelectionRun {
                                 delta(ownScenario.fps(), baselineScenario.fps()),
                                 delta(
                                         ownScenario.msPerChunk(),
-                                        baselineScenario.msPerChunk())));
+                                        baselineScenario.msPerChunk()),
+                                delta(
+                                        ownScenario.heapUsedMegabytes(),
+                                        baselineScenario.heapUsedMegabytes())));
             }
 
             scores.add(
                     new ExperimentListener.CandidateScore(
                             id,
-                            comparisons.isEmpty()
-                                    ? 0
-                                    : BandGate.weightedScore(comparisons, Map.of()),
+                            compositeScore(id, byCandidate, memoryByCandidate, plan),
                             delta(own.mspt(), baseline.mspt()),
                             delta(own.fps(), baseline.fps()),
+                            delta(own.heapUsedMegabytes(), baseline.heapUsedMegabytes()),
                             vsOriginal.get(id),
                             outcome.verdict().toString().toLowerCase(java.util.Locale.ROOT),
-                            outcome.detail(),
+                            blockedBecause(
+                                    outcome,
+                                    byCandidate.getOrDefault(id, List.of()),
+                                    memoryByCandidate.getOrDefault(id, List.of())),
                             channels));
         }
         return scores;
+    }
+
+    /**
+     * Why a candidate did not win, in the terms that decided it.
+     *
+     * <p>The score ranks; the bands gate, and a regression in any scenario on any objective
+     * blocks promotion however large the gains elsewhere. Left unsaid, a card leading with a big
+     * green score and the word "regressed" underneath is a riddle -- so the regressions are named
+     * here, with the objective, because "which one" is the whole question.
+     */
+    private static String blockedBecause(
+            Selection.Outcome outcome, List<Comparison> speed, List<Comparison> memory) {
+        if (outcome.verdict() != Selection.Verdict.REGRESSED) {
+            return outcome.detail();
+        }
+        List<String> regressions = new ArrayList<>();
+        for (Comparison comparison :
+                java.util.stream.Stream.concat(speed.stream(), memory.stream()).toList()) {
+            if (comparison.band() == cx.mia.lucent.laymark.core.stats.Band.REGRESSED) {
+                regressions.add(
+                        String.format(
+                                java.util.Locale.ROOT,
+                                "%s %s %+.1f%%",
+                                comparison.scenarioId(),
+                                comparison.metric().toString().toLowerCase(java.util.Locale.ROOT),
+                                comparison.improvementPercent()));
+            }
+        }
+        return regressions.isEmpty()
+                ? outcome.detail()
+                : "blocked by " + String.join(", ", regressions);
     }
 
     private static Metrics meanMetrics(List<Measured> runs) {
         return new Metrics(
                 mean(runs, m -> m.metrics().mspt()),
                 mean(runs, m -> m.metrics().fps()),
-                mean(runs, m -> m.metrics().msPerChunk()));
+                mean(runs, m -> m.metrics().msPerChunk()),
+                mean(runs, m -> m.metrics().heapUsedMegabytes()));
     }
 
     private static Double mean(
@@ -880,17 +1159,19 @@ public final class SelectionRun {
     private static SelectionReport.Round historyOf(
             int round,
             List<Selection.Outcome> outcomes,
-            Map<String, List<Comparison>> byCandidate) {
+            Map<String, List<Comparison>> byCandidate,
+            Map<String, List<Comparison>> memoryByCandidate,
+            RunPlan plan) {
         List<SelectionReport.Round.Entry> entries = new ArrayList<>();
         for (Selection.Outcome outcome : outcomes) {
-            List<Comparison> comparisons =
-                    byCandidate.getOrDefault(outcome.bundle().candidate(), List.of());
             entries.add(
                     new SelectionReport.Round.Entry(
                             outcome.bundle().candidate(),
-                            comparisons.isEmpty()
-                                    ? 0
-                                    : BandGate.weightedScore(comparisons, Map.of()),
+                            compositeScore(
+                                    outcome.bundle().candidate(),
+                                    byCandidate,
+                                    memoryByCandidate,
+                                    plan),
                             outcome.verdict().toString(),
                             List.copyOf(outcome.bundle().members()),
                             outcome.detail()));

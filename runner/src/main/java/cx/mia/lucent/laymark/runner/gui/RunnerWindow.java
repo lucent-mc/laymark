@@ -133,6 +133,11 @@ public final class RunnerWindow implements ExperimentListener {
     private Timer clock;
     private boolean running;
     private boolean paused;
+    private java.awt.Rectangle planningBounds;
+    // The candidate roster whose results occupy the columns. Other planning controls may change
+    // without making those results irrelevant; changing this roster is the explicit boundary
+    // between the previous experiment and a newly planned one.
+    private List<String> resultCandidateFiles = List.of();
 
     private RunnerWindow(RunControl control, Launcher launcher) {
         this.control = control;
@@ -249,7 +254,14 @@ public final class RunnerWindow implements ExperimentListener {
                         });
 
         // The plan draws itself where its laps will land, live from the first look.
-        planning.onPlanChanged(() -> SwingUtilities.invokeLater(this::renderPlanPreview));
+        planning.onPlanChanged(
+                () -> {
+                    // Snapshot at the event, not when the queued redraw runs. If someone toggles a
+                    // candidate off and straight back on, the first change still invalidates the
+                    // old results as promised.
+                    List<String> candidateFiles = planning.candidateFiles();
+                    SwingUtilities.invokeLater(() -> renderChangedPlan(candidateFiles));
+                });
         SwingUtilities.invokeLater(this::renderPlanPreview);
     }
 
@@ -626,12 +638,20 @@ public final class RunnerWindow implements ExperimentListener {
     }
 
     private void enterRunView() {
+        if (launcher != null) {
+            // Docking is run-only. Remember the operator's planning workspace so completion can
+            // return to it instead of stranding the roster behind a narrow-screen drawer.
+            planningBounds = frame.getBounds();
+            rosterDrawer.close(false);
+            logDrawer.close(false);
+        }
         // The run starts over its own placeholders, not a blank: if the columns hold anything
         // else (the last run's results), the preview redraws first, and each starting lap then
         // replaces its placeholder in place. Stability over spectacle.
         if (!columnsArePreview) {
             renderPlanPreview();
         }
+        resultCandidateFiles = planning.candidateFiles();
         columnsArePreview = false;
         running = true;
         startedAt = System.currentTimeMillis();
@@ -935,7 +955,24 @@ public final class RunnerWindow implements ExperimentListener {
                     columns.revalidate();
                     columns.repaint();
                     planning.setPlanningEnabled(true);
+                    control.rearm();
+                    returnToPlanning();
                 });
+    }
+
+    /** Restores the workspace that existed before docking, with planning immediately reachable. */
+    private void returnToPlanning() {
+        if (launcher == null) {
+            return;
+        }
+        if (planningBounds != null) {
+            frame.setBounds(planningBounds);
+            planningBounds = null;
+        }
+        updateResponsiveLayout();
+        if (railCollapsed) {
+            rosterDrawer.open();
+        }
     }
 
     // --- header readouts ---
@@ -999,6 +1036,14 @@ public final class RunnerWindow implements ExperimentListener {
     private int plannedLaps;
     private int plannedArms;
     private long plannedRunMillis;
+
+    /** Redraws planning columns only when no results remain, or the candidate roster changed. */
+    private void renderChangedPlan(List<String> candidateFiles) {
+        if (!columnsArePreview && resultCandidateFiles.equals(candidateFiles)) {
+            return;
+        }
+        renderPlanPreview();
+    }
 
     /**
      * The run as currently planned, drawn where its laps will land: one estimated column per
@@ -1473,6 +1518,16 @@ public final class RunnerWindow implements ExperimentListener {
                             String.format(Locale.ROOT, "%+.2f", stats.msPerChunkDelta()),
                             direction(stats.msPerChunkDelta(), true)));
         }
+        if (stats.heapUsedMegabytesDelta() != null) {
+            body.add(
+                    statRow(
+                            "retained heap vs baseline",
+                            String.format(
+                                    Locale.ROOT,
+                                    "%+.0f MiB",
+                                    stats.heapUsedMegabytesDelta()),
+                            direction(stats.heapUsedMegabytesDelta(), true)));
+        }
 
         section.add(header);
         section.add(body);
@@ -1609,6 +1664,17 @@ public final class RunnerWindow implements ExperimentListener {
                             String.format(Locale.ROOT, "%+.0f", preliminary.fpsDelta()),
                             direction(preliminary.fpsDelta(), false)));
         }
+        if (preliminary.heapUsedMegabytesDelta() != null) {
+            gridColumns.add(
+                    new StatColumn(
+                            "heap",
+                            "retained heap after explicit GC, delta vs baseline" + soFar,
+                            String.format(
+                                    Locale.ROOT,
+                                    "%+.0f",
+                                    preliminary.heapUsedMegabytesDelta()),
+                            direction(preliminary.heapUsedMegabytesDelta(), true)));
+        }
         preliminary
                 .scenarios()
                 .forEach(
@@ -1704,6 +1770,17 @@ public final class RunnerWindow implements ExperimentListener {
         JLabel verdict = Theme.small(score.verdict());
         verdict.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(verdict);
+        // The score ranks, the bands decide. When they disagree -- a large score that still lost
+        // -- the card has to say which comparison blocked it, or the number reads as the verdict.
+        if (score.detail() != null && !score.detail().isBlank()) {
+            JLabel reason = Theme.small(score.detail());
+            reason.setForeground(
+                    "regressed".equals(score.verdict()) ? Theme.BAD : Theme.MUTED);
+            reason.setToolTipText(score.detail());
+            reason.setMinimumSize(new Dimension(0, 0));
+            reason.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(reason);
+        }
 
         JPanel details = new ExpandingPanel();
         details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
@@ -1743,6 +1820,13 @@ public final class RunnerWindow implements ExperimentListener {
         header.setOpaque(false);
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
         JPanel title = titleRow(chevron, Theme.small(comparison.scenarioId()), null);
+        if (comparison.metric() == Comparison.Metric.MEMORY) {
+            title =
+                    titleRow(
+                            chevron,
+                            Theme.small(comparison.scenarioId() + " · memory"),
+                            null);
+        }
         header.add(title, BorderLayout.CENTER);
         header.add(
                 Theme.mono(
@@ -1790,7 +1874,7 @@ public final class RunnerWindow implements ExperimentListener {
                         "noise floor",
                         String.format(Locale.ROOT, "%.1f%%", comparison.floorPercent()),
                         Theme.MUTED));
-        if (channels != null) {
+        if (channels != null && comparison.metric() == Comparison.Metric.SPEED) {
             if (channels.msptDelta() != null) {
                 body.add(
                         statRow(
@@ -1812,6 +1896,18 @@ public final class RunnerWindow implements ExperimentListener {
                                 String.format(Locale.ROOT, "%+.2f", channels.msPerChunkDelta()),
                                 direction(channels.msPerChunkDelta(), true)));
             }
+        }
+        if (channels != null
+                && comparison.metric() == Comparison.Metric.MEMORY
+                && channels.heapUsedMegabytesDelta() != null) {
+            body.add(
+                    statRow(
+                            "retained heap vs baseline",
+                            String.format(
+                                    Locale.ROOT,
+                                    "%+.0f MiB",
+                                    channels.heapUsedMegabytesDelta()),
+                            direction(channels.heapUsedMegabytesDelta(), true)));
         }
 
         section.add(header);
@@ -1909,8 +2005,17 @@ public final class RunnerWindow implements ExperimentListener {
                             String.format(Locale.ROOT, "%+.0f", score.fpsDelta()),
                             direction(score.fpsDelta(), false)));
         }
+        if (score.heapUsedMegabytesDelta() != null) {
+            columns.add(
+                    new StatColumn(
+                            "heap",
+                            "retained heap after explicit GC, delta vs baseline",
+                            String.format(Locale.ROOT, "%+.0f", score.heapUsedMegabytesDelta()),
+                            direction(score.heapUsedMegabytesDelta(), true)));
+        }
         for (Comparison comparison :
                 comparisons.stream()
+                        .filter(c -> c.metric() == Comparison.Metric.SPEED)
                         .sorted(java.util.Comparator.comparing(Comparison::scenarioId))
                         .toList()) {
             columns.add(

@@ -20,7 +20,7 @@ public final class Laymark {
      * protocol did not change; a genuine protocol change fails immediately and legibly rather
      * than misparsing.
      */
-    public static final int PROTOCOL_VERSION = 1;
+    public static final int PROTOCOL_VERSION = 2;
 
     /**
      * System property carrying the loopback port the runner is listening on.

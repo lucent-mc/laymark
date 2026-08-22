@@ -902,6 +902,20 @@ public final class PlanningView extends JPanel {
                 .toList();
     }
 
+    /**
+     * The stable identity of the candidate roster, in display order.
+     *
+     * <p>Display names are deliberately not identities: two jars may advertise the same mod name.
+     * The runner uses this list to decide whether finished results still describe the plan being
+     * edited.
+     */
+    public List<String> candidateFiles() {
+        return roles.entrySet().stream()
+                .filter(entry -> entry.getValue().role() == Role.CANDIDATE)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
     /** The schedule as currently typed, or null while the text does not parse. */
     public Schedule previewSchedule() {
         try {

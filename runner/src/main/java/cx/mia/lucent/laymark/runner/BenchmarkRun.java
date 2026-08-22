@@ -171,7 +171,8 @@ public final class BenchmarkRun {
                                                                         m.scoredMillis(),
                                                                         m.mspt(),
                                                                         m.fps(),
-                                                                        m.msPerChunk()));
+                                                                        m.msPerChunk(),
+                                                                        m.heapUsedMegabytes()));
                                                     }
                                                     if (frame instanceof Frame.RunFinished
                                                             || frame instanceof Frame.RunFailed) {

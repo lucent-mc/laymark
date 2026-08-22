@@ -180,7 +180,8 @@ public final class HarnessRun {
                                     channels.scoredMillis(),
                                     channels.mspt(),
                                     channels.fps(),
-                                    channels.msPerChunk()));
+                                    channels.msPerChunk(),
+                                    channels.heapUsedMegabytes()));
                 } catch (RuntimeException statsUnavailable) {
                     // Streaming is a courtesy; the result file remains the authoritative record.
                 }
@@ -332,7 +333,7 @@ public final class HarnessRun {
                 new Frame.PhaseEntered(
                         scenario.id(), Phase.UNGENERATED_TRAVERSAL, phaseStartedAt));
 
-        port.beginCapture();
+        port.beginCapture(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         port.teleport(scenario.pose());
         port.awaitStop(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         return port.endCapture();
@@ -369,6 +370,7 @@ public final class HarnessRun {
             port.pregenerate(
                     scenario.pose(), scenario.preset().renderDistance(), PREGENERATION_TIMEOUT);
         }
+        port.prepareForStreaming(scenario.pose(), viewDistance(scenario));
         if (!port.targetHasNoBuiltSections(scenario.pose())) {
             throw new HarnessException(
                     "scenario " + scenario.id() + " measures client streaming, but the target is"
@@ -376,7 +378,7 @@ public final class HarnessRun {
         }
 
         events.accept(new Frame.PhaseEntered(scenario.id(), Phase.GENERATED_STREAMING, phaseStartedAt));
-        port.beginCapture();
+        port.beginCapture(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         port.teleport(scenario.pose());
         port.awaitStop(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         return port.endCapture();

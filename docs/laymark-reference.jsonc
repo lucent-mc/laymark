@@ -14,6 +14,16 @@
 
   "window": { "width": 1600, "height": 900 },
 
+  // Composite score objectives. Each objective is normalized independently first:
+  // speed combines scenario percentages using their paired baseline milliseconds,
+  // while memory combines them using paired retained MiB. The weights then choose
+  // how much each objective matters; set either one to 0 to exclude it. At least
+  // one must be positive. (optional; default: equal weight)
+  "scoreWeights": {
+    "speed": 1.0,
+    "memory": 1.0,
+  },
+
   // Reusable settings bundles, referenced by name from a scenario's "settings".
   // Any field left out takes the default shown. (optional; default: no presets)
   //
@@ -200,6 +210,13 @@
       // Comparisons need at least 2 candidate samples per scenario — the schedule's
       // C-passes supply them (A,B,C,B,C runs each candidate twice). (optional, 1)
       "repetitions": 1,
+
+      // Relevance multiplier for this scenario in BOTH speed and memory objectives.
+      // Baseline-cost weighting still happens automatically inside each objective,
+      // so a cheap channel cannot dominate through a large percentage alone.
+      // Set 0 to measure and report a scenario without letting it affect ranking.
+      // (optional; default: 1.0)
+      "weight": 1.0,
 
       // A preset name from settingsPresets, or the settings object written inline.
       // One field, two spellings — never both. (optional; all defaults)

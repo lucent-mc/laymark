@@ -341,8 +341,9 @@ required, not optional.
 
 ### 6.3 Measurement channels
 
-**Every scenario always records the same channel set.** The stop condition selects only which
-channel is the **scored** metric; everything else is recorded and reported as diagnostic. A
+**Every scenario always records the same channel set.** The stop condition selects the primary
+**speed** metric; retained heap is a separately normalized scored objective. Everything else is
+recorded and reported as diagnostic. A
 three-day run must never end with the realisation that the interesting channel was not captured.
 
 | Channel | Source | Scored |
@@ -353,7 +354,7 @@ three-day run must never end with the realisation that the interesting channel w
 | GPU execution time | vanilla `TimerQuery`, harvested asynchronously | no |
 | Integrated-server MSPT and TPS | Spark statistics | no |
 | GC | Spark statistics | no |
-| Heap | `Runtime`, read at each end — `spark-api` exposes no heap | no |
+| Retained heap | `Runtime`, after explicit GC outside the timed window | **yes** |
 | Work performed | rendered sections, client chunks, server chunks, at each end | no |
 | Time per chunk | derived | for completion targets |
 | Throttle reason, per frame | `FramerateLimitTracker` | no |
@@ -416,8 +417,9 @@ period they cover instead of assuming it matches the capture. (This corrects
 MSPT; the published jar has `SECONDS_10`.) GC is exempt — Spark reports cumulative totals, so that
 one really is differenced across the capture.
 
-Second limit: `spark-api` exposes no heap figure at all, so heap alone is read from `Runtime`. GC
-still comes from Spark.
+Second limit: `spark-api` exposes no heap figure at all, so heap alone is read from `Runtime`. Raw
+occupancy mostly records when G1 happened to run, so scoring uses the retained live set after an
+explicit collection outside the frame window. GC still comes from Spark.
 
 The Spark **profiler** is an opt-in diagnostic pass whose metrics can never reach a score:
 Spark ships no async-profiler binary for Windows and falls back to a sampler whose overhead scales
@@ -551,9 +553,10 @@ promoted, which is required: a combination-only mod presents as margin-of-error,
 is conflict clusters rather than candidate count, so this does not meaningfully explode. Report the
 projected run count before starting.
 
-**Promotion order matters for runtime too:** completion-target scenarios finish faster on a better
-stack, so promoting the biggest improver first makes all remaining work cheaper. Selection is still
-by weighted score — runtime must not influence which stack is recommended.
+**Promotion order follows the composite score.** Speed percentages are cost-weighted by paired
+baseline milliseconds; memory percentages are cost-weighted by paired retained MiB. Those two
+objectives are normalized independently and combined by `scoreWeights`, with each scenario's
+optional `weight` acting as a relevance multiplier in both.
 
 Cost: a comparison is `2 arms × 3 passes × S scenarios`; selection over N mods is `N(N+1)/2`
 comparisons, reduced by the baseline interval. Long runs are accepted; there is no screening tier.

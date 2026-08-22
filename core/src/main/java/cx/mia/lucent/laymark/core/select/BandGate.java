@@ -51,11 +51,9 @@ public final class BandGate implements Selection.Gate {
     /**
      * The score a stack is ordered by.
      *
-     * <p>Weighted by scenario so a scenario nobody cares much about cannot outvote one they do. It
-     * is deliberately separate from promotion order: promoting the biggest improver first makes
-     * completion-target scenarios finish faster and the whole run cheaper, but
-     * <strong>runtime must never influence which stack is recommended</strong>, so the two orders
-     * are computed from different things.
+     * <p>Each percentage is weighted by the paired baseline cost it acts on. A 200% change to
+     * 0.001 ms of work is a 0.002 ms change, and must not outvote a 10% change to 10 ms of work.
+     * Operator scenario weights remain multipliers on that cost rather than replacing it.
      */
     public static double weightedScore(List<Comparison> comparisons, Map<String, Double> weights) {
         if (comparisons.isEmpty()) {
@@ -65,8 +63,9 @@ public final class BandGate implements Selection.Gate {
         double weight = 0;
         for (Comparison comparison : comparisons) {
             double scenarioWeight = weights.getOrDefault(comparison.scenarioId(), 1.0);
-            total += comparison.improvementPercent() * scenarioWeight;
-            weight += scenarioWeight;
+            double costWeight = scenarioWeight * comparison.baselineValue();
+            total += comparison.improvementPercent() * costWeight;
+            weight += costWeight;
         }
         return weight == 0 ? 0 : total / weight;
     }

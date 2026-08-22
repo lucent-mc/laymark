@@ -116,7 +116,9 @@ public final class MarkdownReport {
         }
 
         out.append("## Per-scenario results\n\n");
-        out.append("| Mod | Scenario | Band | Change | Interval | n |\n|---|---|---|---|---|---|\n");
+        out.append(
+                "| Mod | Scenario | Metric | Band | Change | Interval | n |\n"
+                        + "|---|---|---|---|---|---|---|\n");
         for (Comparison comparison : report.comparisons()) {
             // Regressions are named, not averaged away: a mod that helps one scenario and hurts
             // another is presenting a trade, and the trade is the finding.
@@ -124,6 +126,8 @@ public final class MarkdownReport {
                     .append(comparison.candidateId())
                     .append(" | ")
                     .append(comparison.scenarioId())
+                    .append(" | ")
+                    .append(comparison.metric().toString().toLowerCase(java.util.Locale.ROOT))
                     .append(" | **")
                     .append(comparison.band())
                     .append("** | ")

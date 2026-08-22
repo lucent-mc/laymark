@@ -1,5 +1,6 @@
 package cx.mia.lucent.laymark.core.result;
 
+import cx.mia.lucent.laymark.core.harness.HarnessException;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
 
@@ -13,8 +14,14 @@ import cx.mia.lucent.laymark.core.plan.StopCondition;
  * @param scoredMillis the scored metric under the plan's stop condition — time-per-chunk for a
  *     CHUNKS stop where the channel exists, mean frame time otherwise
  * @param mspt server mean tick time, null where Spark could not supply it
+ * @param heapUsedMegabytes retained heap after the capture, null on historical measurements
  */
-public record Channels(double scoredMillis, Double mspt, Double fps, Double msPerChunk) {
+public record Channels(
+        double scoredMillis,
+        Double mspt,
+        Double fps,
+        Double msPerChunk,
+        Double heapUsedMegabytes) {
 
     public static Channels of(ScenarioResult scenario, RunPlan plan) {
         var segment = scenario.segments().get(scenario.segments().size() - 1);
@@ -26,15 +33,26 @@ public record Channels(double scoredMillis, Double mspt, Double fps, Double msPe
                         .filter(s -> s.id().equals(scenario.scenarioId()))
                         .findFirst()
                         .orElseThrow();
-        double scored =
-                spec.stopCondition().kind() == StopCondition.Kind.CHUNKS && perChunk != null
-                        ? perChunk
-                        : scenario.statistics().meanMillis();
+        double scored;
+        if (spec.stopCondition().kind() == StopCondition.Kind.CHUNKS) {
+            if (perChunk == null) {
+                throw new HarnessException(
+                        "scenario " + scenario.scenarioId()
+                                + " completed a CHUNKS target without receiving any chunks;"
+                                + " frame time cannot be substituted for time per chunk");
+            }
+            scored = perChunk;
+        } else {
+            scored = scenario.statistics().meanMillis();
+        }
 
         return new Channels(
                 scored,
                 spark == null ? null : spark.millisPerTickMean(),
                 segment.summaries().interval().meanFramesPerSecond(),
-                perChunk);
+                perChunk,
+                segment.measurement().memoryAfter() == null
+                        ? null
+                        : segment.measurement().memoryAfter().heapUsedMegabytes());
     }
 }

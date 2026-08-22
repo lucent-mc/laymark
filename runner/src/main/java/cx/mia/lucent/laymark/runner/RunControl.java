@@ -85,4 +85,18 @@ public final class RunControl {
     public synchronized void clearAbort() {
         this.abort = null;
     }
+
+    /**
+     * Starts a new experiment with fresh control state after the previous one has fully ended.
+     *
+     * <p>Stop is deliberately sticky within one experiment: every remaining arm must observe it.
+     * The desktop runner is reusable, though, so its terminal callback clears that state only after
+     * the game is gone and the instance has been restored.
+     */
+    public synchronized void rearm() {
+        if (abort != null) {
+            throw new IllegalStateException("cannot rearm while a game process is still registered");
+        }
+        state = State.RUNNING;
+    }
 }

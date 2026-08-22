@@ -403,6 +403,50 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 });
     }
 
+    @Override
+    public void prepareForStreaming(Pose target, int viewDistance) {
+        long loaded =
+                ClientThread.call(
+                        "checking whether the streaming target needs staging",
+                        () ->
+                                Counters.chunksLoadedAround(
+                                        target.chunkX(), target.chunkZ(), viewDistance));
+        if (loaded == 0) {
+            return;
+        }
+
+        // A reused save reopens at the dependency's last player position — normally the target
+        // itself. Move more than two send radii away and settle there before opening the measured
+        // teleport, otherwise startup has already paid an arbitrary fraction of the stream.
+        int stagingOffsetChunks = Math.max(64, viewDistance * 3 + 8);
+        Pose staging =
+                new Pose(
+                        target.x() + stagingOffsetChunks * 16.0,
+                        target.y(),
+                        target.z(),
+                        target.yaw(),
+                        target.pitch());
+        position(staging);
+
+        long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            loaded =
+                    ClientThread.call(
+                            "waiting for the streaming target to unload",
+                            () ->
+                                    Counters.chunksLoadedAround(
+                                            target.chunkX(), target.chunkZ(), viewDistance));
+            if (loaded == 0) {
+                return;
+            }
+            ClientThread.sleep(PROGRESS_POLL);
+        }
+        throw new HarnessException(
+                "streaming target still held " + loaded
+                        + " chunks after staging away from it; the measured work cannot start"
+                        + " from zero");
+    }
+
     /**
      * Places scene geometry, in declaration order, verifying counts against each file.
      *
@@ -453,7 +497,28 @@ public final class MinecraftHarnessPort implements HarnessPort {
 
     @Override
     public void beginCapture() {
-        MemorySnapshot memoryBefore = Counters.memory();
+        beginCapture(null, null, 0);
+    }
+
+    @Override
+    public void beginCapture(StopCondition stop, Pose around, int viewDistance) {
+        Long initialTargetChunks = null;
+        if (stop != null && stop.kind() == StopCondition.Kind.CHUNKS) {
+            initialTargetChunks =
+                    ClientThread.call(
+                            "checking the chunk target before capture",
+                            () ->
+                                    Counters.chunksLoadedAround(
+                                            around.chunkX(), around.chunkZ(), viewDistance));
+            if (initialTargetChunks != 0) {
+                throw new HarnessException(
+                        "chunk capture started with " + initialTargetChunks
+                                + " target chunks already loaded; the measured work must start"
+                                + " from zero");
+            }
+        }
+
+        MemorySnapshot memoryBefore = Counters.retainedMemory();
         WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
         spark.start();
         ClientThread.run(
@@ -462,7 +527,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     gpuTimer.start();
                     recorder.start();
                 });
-        openedAt = new Opened(workBefore, memoryBefore);
+        openedAt = new Opened(workBefore, memoryBefore, initialTargetChunks);
     }
 
     @Override
@@ -485,11 +550,32 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 opened.work(),
                 workAfter,
                 opened.memory(),
-                Counters.memory());
+                Counters.retainedMemory(),
+                opened.clientChunksReceived);
     }
 
     /** State of the world when the open window started, so its deltas can be taken. */
-    private record Opened(WorkCounters work, MemorySnapshot memory) {}
+    private static final class Opened {
+        private final WorkCounters work;
+        private final MemorySnapshot memory;
+        private final Long initialTargetChunks;
+        private Long clientChunksReceived;
+
+        private Opened(
+                WorkCounters work, MemorySnapshot memory, Long initialTargetChunks) {
+            this.work = work;
+            this.memory = memory;
+            this.initialTargetChunks = initialTargetChunks;
+        }
+
+        WorkCounters work() {
+            return work;
+        }
+
+        MemorySnapshot memory() {
+            return memory;
+        }
+    }
 
     private volatile Opened openedAt;
 
@@ -504,7 +590,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     "framerate was already throttled before the capture began: " + throttled);
         }
 
-        beginCapture();
+        beginCapture(stop, around, viewDistance);
         awaitStop(stop, around, viewDistance);
         return endCapture();
     }
@@ -546,6 +632,12 @@ public final class MinecraftHarnessPort implements HarnessPort {
                         case TIME -> throw new IllegalStateException("handled above");
                     };
             if (progress >= stop.target()) {
+                if (stop.kind() == StopCondition.Kind.CHUNKS) {
+                    Opened opened = openedAt;
+                    long initial =
+                            opened.initialTargetChunks == null ? 0 : opened.initialTargetChunks;
+                    opened.clientChunksReceived = progress - initial;
+                }
                 return;
             }
             if (progress > best) {

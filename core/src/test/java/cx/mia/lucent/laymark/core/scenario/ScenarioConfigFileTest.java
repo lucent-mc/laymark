@@ -7,6 +7,7 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.Phase;
 import cx.mia.lucent.laymark.core.harness.Pose;
 import cx.mia.lucent.laymark.core.plan.StopCondition;
+import cx.mia.lucent.laymark.core.plan.ScoreWeights;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,6 +56,7 @@ class ScenarioConfigFileTest {
         for (Class<?> recordType :
                 new Class<?>[] {
                     ScenarioConfig.class,
+                    ScoreWeights.class,
                     ScenarioDefinition.class,
                     StopSpec.class,
                     Pose.class,
@@ -87,6 +89,15 @@ class ScenarioConfigFileTest {
                 }) {
             assertTrue(contents.contains(documented), documented + " is absent from the reference");
         }
+    }
+
+    @Test
+    void omittedScoreWeightsAndScenarioWeightUseDocumentedDefaults() {
+        ScenarioConfig config =
+                ConfigCodec.read("{\"version\":1,\"scenarios\":[{\"id\":\"render\"}]}");
+
+        assertEquals(ScoreWeights.DEFAULT, config.scoreWeights());
+        assertEquals(1.0, config.resolve("test", "out").scenarios().getFirst().weight());
     }
 
     private static void assertEnumValuesDocumented(String contents, Enum<?>[] values) {
