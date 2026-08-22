@@ -74,15 +74,24 @@ public final class MinecraftHarnessPort implements HarnessPort {
     /** The save this run created, remembered so disk-level questions can be asked about it. */
     private volatile String currentLevelId;
 
+    /** The run's window size, a stratum carried on the plan; the preset re-enforces it. */
+    private final cx.mia.lucent.laymark.core.plan.WindowSize window;
+
     public MinecraftHarnessPort(ClientChannels channels) {
+        this(channels, cx.mia.lucent.laymark.core.plan.WindowSize.DEFAULT);
+    }
+
+    public MinecraftHarnessPort(
+            ClientChannels channels, cx.mia.lucent.laymark.core.plan.WindowSize window) {
         this.recorder = channels.frames();
         this.gpuTimer = channels.gpu();
         this.spark = channels.spark();
+        this.window = window;
     }
 
     @Override
     public void applyPreset(Preset preset) {
-        ClientThread.run("applying the preset", () -> PresetOptions.apply(preset));
+        ClientThread.run("applying the preset", () -> PresetOptions.apply(preset, window));
     }
 
     @Override
@@ -394,6 +403,50 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 });
     }
 
+    @Override
+    public void prepareForStreaming(Pose target, int viewDistance) {
+        long loaded =
+                ClientThread.call(
+                        "checking whether the streaming target needs staging",
+                        () ->
+                                Counters.chunksLoadedAround(
+                                        target.chunkX(), target.chunkZ(), viewDistance));
+        if (loaded == 0) {
+            return;
+        }
+
+        // A reused save reopens at the dependency's last player position — normally the target
+        // itself. Move more than two send radii away and settle there before opening the measured
+        // teleport, otherwise startup has already paid an arbitrary fraction of the stream.
+        int stagingOffsetChunks = Math.max(64, viewDistance * 3 + 8);
+        Pose staging =
+                new Pose(
+                        target.x() + stagingOffsetChunks * 16.0,
+                        target.y(),
+                        target.z(),
+                        target.yaw(),
+                        target.pitch());
+        position(staging);
+
+        long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            loaded =
+                    ClientThread.call(
+                            "waiting for the streaming target to unload",
+                            () ->
+                                    Counters.chunksLoadedAround(
+                                            target.chunkX(), target.chunkZ(), viewDistance));
+            if (loaded == 0) {
+                return;
+            }
+            ClientThread.sleep(PROGRESS_POLL);
+        }
+        throw new HarnessException(
+                "streaming target still held " + loaded
+                        + " chunks after staging away from it; the measured work cannot start"
+                        + " from zero");
+    }
+
     /**
      * Places scene geometry, in declaration order, verifying counts against each file.
      *
@@ -444,7 +497,28 @@ public final class MinecraftHarnessPort implements HarnessPort {
 
     @Override
     public void beginCapture() {
-        MemorySnapshot memoryBefore = Counters.memory();
+        beginCapture(null, null, 0);
+    }
+
+    @Override
+    public void beginCapture(StopCondition stop, Pose around, int viewDistance) {
+        Long initialTargetChunks = null;
+        if (stop != null && stop.kind() == StopCondition.Kind.CHUNKS) {
+            initialTargetChunks =
+                    ClientThread.call(
+                            "checking the chunk target before capture",
+                            () ->
+                                    Counters.chunksLoadedAround(
+                                            around.chunkX(), around.chunkZ(), viewDistance));
+            if (initialTargetChunks != 0) {
+                throw new HarnessException(
+                        "chunk capture started with " + initialTargetChunks
+                                + " target chunks already loaded; the measured work must start"
+                                + " from zero");
+            }
+        }
+
+        MemorySnapshot memoryBefore = Counters.retainedMemory();
         WorkCounters workBefore = ClientThread.call("reading work counters", Counters::work);
         spark.start();
         ClientThread.run(
@@ -453,7 +527,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     gpuTimer.start();
                     recorder.start();
                 });
-        openedAt = new Opened(workBefore, memoryBefore);
+        openedAt = new Opened(workBefore, memoryBefore, initialTargetChunks);
     }
 
     @Override
@@ -476,11 +550,32 @@ public final class MinecraftHarnessPort implements HarnessPort {
                 opened.work(),
                 workAfter,
                 opened.memory(),
-                Counters.memory());
+                Counters.retainedMemory(),
+                opened.clientChunksReceived);
     }
 
     /** State of the world when the open window started, so its deltas can be taken. */
-    private record Opened(WorkCounters work, MemorySnapshot memory) {}
+    private static final class Opened {
+        private final WorkCounters work;
+        private final MemorySnapshot memory;
+        private final Long initialTargetChunks;
+        private Long clientChunksReceived;
+
+        private Opened(
+                WorkCounters work, MemorySnapshot memory, Long initialTargetChunks) {
+            this.work = work;
+            this.memory = memory;
+            this.initialTargetChunks = initialTargetChunks;
+        }
+
+        WorkCounters work() {
+            return work;
+        }
+
+        MemorySnapshot memory() {
+            return memory;
+        }
+    }
 
     private volatile Opened openedAt;
 
@@ -495,7 +590,7 @@ public final class MinecraftHarnessPort implements HarnessPort {
                     "framerate was already throttled before the capture began: " + throttled);
         }
 
-        beginCapture();
+        beginCapture(stop, around, viewDistance);
         awaitStop(stop, around, viewDistance);
         return endCapture();
     }
@@ -537,6 +632,12 @@ public final class MinecraftHarnessPort implements HarnessPort {
                         case TIME -> throw new IllegalStateException("handled above");
                     };
             if (progress >= stop.target()) {
+                if (stop.kind() == StopCondition.Kind.CHUNKS) {
+                    Opened opened = openedAt;
+                    long initial =
+                            opened.initialTargetChunks == null ? 0 : opened.initialTargetChunks;
+                    opened.clientChunksReceived = progress - initial;
+                }
                 return;
             }
             if (progress > best) {
@@ -573,9 +674,17 @@ public final class MinecraftHarnessPort implements HarnessPort {
     /** How often to ask whether a completion target has been met. */
     private static final Duration PROGRESS_POLL = Duration.ofMillis(100);
 
-    /** Why the GPU channel is empty, or null when it worked. Reported as a run-level flag. */
+    /**
+     * Why the GPU channel is empty, or null when it worked. Reported as a run-level flag.
+     *
+     * <p>A short timeout, not the resource-reload default: this is a getter, and it is asked at
+     * the end of the run when the client thread may be grinding through the final world's save.
+     * A healthy client answers in milliseconds; an unhealthy one should cost seconds, because
+     * the caller treats the answer as metadata either way.
+     */
     public String gpuUnavailableReason() {
-        return ClientThread.call("checking gpu channel", gpuTimer::unavailableReason);
+        return ClientThread.call(
+                "checking gpu channel", Duration.ofSeconds(15), gpuTimer::unavailableReason);
     }
 
     /** Why the Spark channel is empty, or null when it worked. */

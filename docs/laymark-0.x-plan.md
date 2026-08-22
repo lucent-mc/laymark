@@ -62,7 +62,8 @@ The whole of §8.4's runtime. `Selection`, `Bundle`, `BandGate`, `Branching`, `S
 Added from the first real two-candidate run (details in #30):
 - Pool a candidate's arms into one t-based measurement per scenario; one composite **score** per
   candidate, per-scenario comparisons underneath as evidence.
-- Candidate cards in the GUI: score, coloured per-metric deltas (mspt / fps / time-per-chunk),
+- Candidate cards in the GUI: composite score, coloured per-metric deltas (mspt / fps /
+  time-per-chunk / retained heap),
   and from round 2 a second row against the *original* baseline as well as the current one.
 - The slate's `armsTotal` becomes the projected total across rounds, so `n/N arms in r/R runs`
   and the ETA describe the whole experiment.

@@ -19,17 +19,31 @@ import java.util.List;
  * @param pairs how many candidate runs contributed, which is what the interval width rests on
  * @param voided comparisons excluded because their runs were not comparable, kept as a count so a
  *     reader can see the experiment was smaller than it looks
+ * @param baselineValue mean of the paired baseline values. This is the absolute cost that the
+ *     percentage change acts on, retained so composite scoring can distinguish a large relative
+ *     change to nearly-free work from a small relative change to expensive work.
  */
 public record Comparison(
         String candidateId,
         String scenarioId,
+        Metric metric,
         Band band,
         double changePercent,
         double lowPercent,
         double highPercent,
         int pairs,
         int voided,
-        double floorPercent) {
+        double floorPercent,
+        double baselineValue) {
+
+    public enum Metric {
+        SPEED,
+        MEMORY
+    }
+
+    public Comparison {
+        metric = metric == null ? Metric.SPEED : metric;
+    }
 
     /**
      * Practical floor below which a real difference is still not worth acting on.
@@ -66,7 +80,7 @@ public record Comparison(
             List<Run> baseline,
             List<Run> candidate,
             double floorPercent) {
-        return of(candidateId, scenarioId, baseline, candidate, floorPercent, null);
+        return of(candidateId, scenarioId, Metric.SPEED, baseline, candidate, floorPercent, null);
     }
 
     /**
@@ -82,7 +96,38 @@ public record Comparison(
             double floorPercent,
             MachineProfile profile) {
 
+        return of(
+                candidateId,
+                scenarioId,
+                Metric.SPEED,
+                baseline,
+                candidate,
+                floorPercent,
+                profile);
+    }
+
+    /** Paired comparison for a named objective such as retained heap. */
+    public static Comparison of(
+            String candidateId,
+            String scenarioId,
+            Metric metric,
+            List<Run> baseline,
+            List<Run> candidate,
+            double floorPercent) {
+        return of(candidateId, scenarioId, metric, baseline, candidate, floorPercent, null);
+    }
+
+    private static Comparison of(
+            String candidateId,
+            String scenarioId,
+            Metric metric,
+            List<Run> baseline,
+            List<Run> candidate,
+            double floorPercent,
+            MachineProfile profile) {
+
         List<Double> differences = new ArrayList<>();
+        List<Double> references = new ArrayList<>();
         int voided = 0;
 
         for (Run run : candidate) {
@@ -98,6 +143,7 @@ public record Comparison(
             // Percent change against the local baseline, so every pair is on one scale and the
             // mean of them is meaningful across scenarios with different absolute frame times.
             differences.add((run.scoredMillis() - reference) / reference * 100.0);
+            references.add(reference);
         }
 
         if (differences.size() < 2) {
@@ -119,16 +165,20 @@ public record Comparison(
 
         double low = mean - margin;
         double high = mean + margin;
+        double baselineValue =
+                references.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
         return new Comparison(
                 candidateId,
                 scenarioId,
+                metric,
                 band(low, high, floorPercent),
                 mean,
                 low,
                 high,
                 differences.size(),
                 voided,
-                floorPercent);
+                floorPercent,
+                baselineValue);
     }
 
     /**

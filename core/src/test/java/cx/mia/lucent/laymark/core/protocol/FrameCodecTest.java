@@ -24,6 +24,11 @@ class FrameCodecTest {
                 new Frame.PhaseEntered("chunkgen-high-altitude", Phase.UNGENERATED_TRAVERSAL, 99L),
                 new Frame.ScenarioFinished("entity-culling", true, ""),
                 new Frame.ScenarioFinished("entity-culling", false, "throttle fired mid-capture"),
+                new Frame.ScenarioMeasured(
+                        "chunk-generation", 1, "WARM", 41.7, 3.2, 187.0, 41.7, 2048.0),
+                // Null channels survive the wire: Spark absent and no chunk stop are normal runs.
+                new Frame.ScenarioMeasured(
+                        "resident-render", 2, "COLD", 6.9, null, 144.5, null, null),
                 new Frame.RunFailed("preset-drift", "renderDistance read back as 12, expected 32"),
                 new Frame.RunFinished("runs/abc123/result.json"));
     }

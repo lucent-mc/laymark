@@ -1,0 +1,289 @@
+// This config defines Laymark's "plan". It specifies the settings to configure before running
+// arms and scenarios, and it specifies the scenarios to run.
+//
+// Each scenario comes with its own settings overrides, or you can backref a settingsPreset.
+// Scenarios also specify details about the world to create, the positioning for the player,
+// the content to generate (using .schem), what to measure, and when to stop.
+//
+// Both the runner and the mod copy this default config, with this reference comments to
+// config/laymark.jsonc when it is missing.
+{
+  // Schema version. Bumped only when an existing document would be read WRONGLY,
+  // not merely partially. Currently always 1.
+  "version": 1,
+
+  "window": { "width": 1600, "height": 900 },
+
+  // Composite score objectives. Each objective is normalized independently first:
+  // speed combines scenario percentages using their paired baseline milliseconds,
+  // while memory combines them using paired retained MiB. The weights then choose
+  // how much each objective matters; set either one to 0 to exclude it. At least
+  // one must be positive. (optional; default: equal weight)
+  "scoreWeights": {
+    "speed": 1.0,
+    "memory": 1.0,
+  },
+
+  // Reusable settings bundles, referenced by name from a scenario's "settings".
+  // Any field left out takes the default shown. (optional; default: no presets)
+  //
+  // Settings are processed by namespace.key.value. This means that you can apply
+  // ANY setting from any mod using a loader config API ("sodium": { ... }).
+  // This will fail the run if the mod is not installed.
+  //
+  // fps limit, vsync, fullscreen, and minecraft's "graphics preset" are NOT
+  // configurable, by design — a config that could set these could censor its
+  // own results, and they are refused even through "options".
+  "settingsPresets": {
+    "chunks": {
+      "minecraft": {
+        "renderDistance": 32,
+        "simulationDistance": 5,
+        "particles": "MINIMAL",
+        "clouds": "OFF",
+        "entityShadows": false,
+        "biomeBlendRadius": 2,
+        "fieldOfView": 110,
+        "gamma": 1.0,
+
+        // ------------------------------------------------------------------
+        // Every other minecraft setting, commented out at vanilla's default.
+        // Keys are the game's own options.txt keys, values go through each
+        // option's own codec — an unknown key or unacceptable value fails the
+        // run naming the option. Anything left out stays at whatever the
+        // instance has. Three keys take a humane spelling instead of the raw
+        // codec form: "fieldOfView" (degrees; raw "fov" stores (d-70)/40),
+        // "particles" (names; raw form is an id int) and "clouds" (names;
+        // raw key is "renderClouds" with legacy strings).
+        // ------------------------------------------------------------------
+        // --- graphics ---
+        // "renderDistance": 12,          // chunks, 2..32
+        // "simulationDistance": 12,      // chunks, 5..32 — server tick range
+        // "particles": "ALL",            // ALL | DECREASED | MINIMAL
+        // "clouds": "FANCY",             // OFF | FAST | FANCY
+        // "cloudRange": 128,             // chunks, 2..128
+        // "entityShadows": true,
+        // "entityDistanceScaling": 1.0,  // 0.5..5.0
+        // "biomeBlendRadius": 2,         // 0..7
+        // "fieldOfView": 70,             // degrees, 30..110
+        // "gamma": 0.5,                  // brightness, 0.0..1.0
+        // "ao": true,                    // smooth lighting
+        // "cutoutLeaves": true,
+        // "improvedTransparency": false,
+        // "mipmapLevels": 4,             // 0..4
+        // "maxAnisotropyBit": 2,         // 1..3 -> 2x/4x/8x
+        // "textureFiltering": 0,         // 0 none | 1 rgss | 2 anisotropic
+        // "prioritizeChunkUpdates": 0,   // 0 none | 1 by player | 2 nearby
+        // "chunkSectionFadeInTime": 0.75, // seconds, 0.0..2.0
+        // "weatherRadius": 10,           // blocks, 3..10
+        // "vignette": true,
+        // "screenEffectScale": 1.0,      // 0.0..1.0
+        // "fovEffectScale": 1.0,         // 0.0..1.0
+        // "darknessEffectScale": 1.0,    // 0.0..1.0
+        // "glintSpeed": 0.5,             // 0.0..1.0
+        // "glintStrength": 0.75,         // 0.0..1.0
+        // "guiScale": 0,                 // 0 = auto
+        // "menuBackgroundBlurriness": 5, // 0..10
+        // "forceUnicodeFont": false,
+        // "japaneseGlyphVariants": false, // defaults true on Japanese systems
+        // "darkMojangStudiosBackground": false,
+        // "hideLightningFlashes": false,
+        // "hideSplashTexts": false,
+        // "highContrast": false,
+        // "highContrastBlockOutline": false,
+        // --- audio ---
+        // "soundDevice": "",             // "" = system default
+        // "directionalAudio": false,
+        // "showSubtitles": false,
+        // "musicToast": "never",         // never | game_and_pause_screen | always
+        // "musicFrequency": "DEFAULT",   // DEFAULT | FREQUENT | CONSTANT
+        // "soundCategory_master": 1.0,   // all eleven categories default 1.0:
+        // "soundCategory_music": 1.0,    // master, music, record, weather, block,
+        // "soundCategory_record": 1.0,   // hostile, neutral, player, ambient,
+        // "soundCategory_weather": 1.0,  // voice, ui
+        // "soundCategory_block": 1.0,
+        // "soundCategory_hostile": 1.0,
+        // "soundCategory_neutral": 1.0,
+        // "soundCategory_player": 1.0,
+        // "soundCategory_ambient": 1.0,
+        // "soundCategory_voice": 1.0,
+        // "soundCategory_ui": 1.0,
+        // --- interface & chat ---
+        // "narrator": 0,                 // 0 off | 1 all | 2 chat | 3 system
+        // "chatVisibility": 0,           // 0 shown | 1 commands only | 2 hidden
+        // "chatColors": true,
+        // "chatLinks": true,
+        // "chatLinksPrompt": true,
+        // "chatOpacity": 1.0,
+        // "chatLineSpacing": 0.0,
+        // "textBackgroundOpacity": 0.5,
+        // "backgroundForChatOnly": true,
+        // "chatScale": 1.0,
+        // "chatWidth": 1.0,
+        // "chatHeightFocused": 1.0,
+        // "chatHeightUnfocused": 0.4375,
+        // "chatDelay": 0.0,              // seconds, 0.0..6.0
+        // "notificationDisplayTime": 1.0, // multiplier, 0.5..10.0
+        // "autoSuggestions": true,
+        // "hideMatchedNames": true,
+        // "onlyShowSecureChat": false,
+        // "saveChatDrafts": false,
+        // "reducedDebugInfo": false,
+        // "showAutosaveIndicator": true,
+        // "allowServerListing": true,
+        // "realmsNotifications": true,
+        // "telemetryOptInExtra": false,
+        // "panoramaScrollSpeed": 1.0,
+        // "operatorItemsTab": false,
+        // --- controls & input ---
+        // "mouseSensitivity": 0.5,       // 0.0..1.0
+        // "mouseWheelSensitivity": 1.0,
+        // "rawMouseInput": true,
+        // "discrete_mouse_scroll": false,
+        // "invertXMouse": false,
+        // "invertYMouse": false,
+        // "touchscreen": false,
+        // "toggleCrouch": false,         // false = hold
+        // "toggleSprint": false,
+        // "toggleAttack": false,
+        // "toggleUse": false,
+        // "sprintWindow": 7,             // double-tap window, 0..10
+        // "autoJump": false,
+        // "rotateWithMinecart": false,
+        // "bobView": true,
+        // "allowCursorChanges": true,
+        // "narratorHotkey": true,
+        // "mainHand": "right",           // "left" | "right"
+        // "attackIndicator": 1,          // 0 off | 1 crosshair | 2 hotbar
+      },
+    },
+  },
+  // The scenarios, run in declaration order. Array position is part of a scenario's
+  // identity — scenario 1 runs against a colder JVM than scenario 5 — so append new
+  // scenarios rather than inserting them if you want results comparable across runs.
+  "scenarios": [
+    {
+      // Stable id. Results are keyed by it; dependsOn refers to it. Required.
+      "id": "chunk-generation",
+
+      // What to capture. One name or a list. (optional; default: RESIDENT_RENDER)
+      //   SPAWN_GENERATION      world creation through the join barrier. Its frame
+      //                         channel sits under a vanilla 60fps menu cap (flagged,
+      //                         expected); the signal is duration and work counters.
+      //   UNGENERATED_TRAVERSAL generation and everything downstream: the capture
+      //                         brackets a teleport into terrain that has NEVER been
+      //                         generated. Hard-fails if the target already exists —
+      //                         so keep the pose far from spawn (see "pose").
+      //   GENERATED_STREAMING   client-side streaming from disk: deserialize, send,
+      //                         mesh, upload. Needs terrain that already exists —
+      //                         either dependsOn a generating scenario (same world is
+      //                         reused) or Chunky installed (pre-generates off the
+      //                         measured path). Hard-fails if the client already holds
+      //                         the meshes.
+      //   RESIDENT_RENDER       the steady render path, everything loaded and settled.
+      // Combinations are allowed: ["SPAWN_GENERATION", "RESIDENT_RENDER"] measures
+      // both phases in one repetition, in that order.
+      "measure": ["SPAWN_GENERATION", "UNGENERATED_TRAVERSAL"],
+
+      // When the capture ends — and therefore which number is the scored one.
+      // (optional; default: 30s of TIME)
+      "stop": {
+        // TIME    target = milliseconds of capture. Same window in both arms; frame
+        //         distributions compare directly. timeout optional (2x target).
+        // CHUNKS  target = chunks loaded around the pose, judged under the game's own
+        //         send predicate. Windows differ per arm, so the scored metric becomes
+        //         time-per-chunk. timeout REQUIRED.
+        // FRAMES  target = frames presented. Equal sample counts; unequal wall-clock.
+        //         timeout REQUIRED.
+        "kind": "CHUNKS",
+        // A number, or the one named target:
+        //   "all-in-radius"  every chunk the game will actually send for the preset's
+        //                    render distance (a flattened disc, ~3725 at rd 32 — NOT
+        //                    the enclosing square). Stays correct when you change the
+        //                    render distance; a literal number does not.
+        "target": "all-in-radius",
+        "timeout": 1800000, // ms; a completion target with no timeout would hang a
+        // broken stack forever, so it is required
+      },
+
+      // Fresh world per repetition; more repetitions buy narrower intervals.
+      // Comparisons need at least 2 candidate samples per scenario — the schedule's
+      // C-passes supply them (A,B,C,B,C runs each candidate twice). (optional, 1)
+      "repetitions": 1,
+
+      // Relevance multiplier for this scenario in BOTH speed and memory objectives.
+      // Baseline-cost weighting still happens automatically inside each objective,
+      // so a cheap channel cannot dominate through a large percentage alone.
+      // Set 0 to measure and report a scenario without letting it affect ranking.
+      // (optional; default: 1.0)
+      "weight": 1.0,
+
+      // A preset name from settingsPresets, or the settings object written inline.
+      // One field, two spellings — never both. (optional; all defaults)
+      "settings": "chunks",
+
+      // Where the player stands and looks. Coordinates and rotations must be finite;
+      // (optional; default 0.5/200/0.5, yaw 0, pitch 90)
+      "pose": {
+        "x": 16384.5,
+        "y": 500.0,
+        "z": 16384.5,
+        "yaw": 0.0,
+        "pitch": 90.0,
+      },
+
+      // Fixed so both arms generate identical terrain. (optional, 1)
+      "seed": 1,
+
+      // Villages, strongholds, etc. Off keeps generation cost uniform. (optional, false)
+      "generateStructures": true,
+
+      // Scene geometry placed before the barrier, in order. Sponge Schematic v3
+      // (.schem — WorldEdit/FAWE/Litematica export). Paths are relative to this
+      // config file; absolute paths and .. are refused. originX/Y/Z are the block
+      // coordinates where the schematic's own origin is placed. (optional, none)
+      "content": [
+        // { "schematic": "scenes/pen.schem", "originX": 32760, "originY": 200, "originZ": 32760 }
+      ],
+
+      // Scenarios that must run first. Dependency means WORLD REUSE: this scenario
+      // runs in the world its dependency generated (reopened, so the client's meshes
+      // are dropped but the terrain stays). One dependency at most — two would name
+      // two worlds. Repetition counts must match the dependency's. A scenario whose
+      // dependency failed fails fast rather than measuring the wreckage. (optional)
+      "dependsOn": [],
+    },
+
+    {
+      // The classic pairing: measure loading the terrain the scenario above generated.
+      "id": "chunk-loading",
+      "dependsOn": ["chunk-generation"],
+      "measure": ["GENERATED_STREAMING"],
+      "settings": "chunks",
+      "pose": {
+        "x": 16384.5,
+        "y": 500.0,
+        "z": 16384.5,
+        "yaw": 0.0,
+        "pitch": 90.0,
+      },
+      "seed": 1,
+      "stop": {
+        "kind": "CHUNKS",
+        "target": "all-in-radius",
+        "timeout": 600000,
+      },
+    },
+  ],
+}
+
+// Related files, same directory:
+//   laymark-dependencies.json   operator dependency overrides (mod-id vocabulary):
+//     { "requires": { "some_mod": ["library_it_forgot"] },
+//       "incompatible": [ ["mod_a", "mod_b"] ] }
+//
+// For Inlay users — keep Laymark's files out of your layer via .layignore:
+//   laymark-runner-*.jar
+//   .laymark/
+//   config/laymark.jsonc
+//   config/laymark-dependencies.json

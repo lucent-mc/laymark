@@ -101,4 +101,16 @@ final class Counters {
         long committed = runtime.totalMemory();
         return new MemorySnapshot(committed - runtime.freeMemory(), committed);
     }
+
+    /**
+     * The live heap after an explicit collection, for cross-process comparison.
+     *
+     * <p>Raw heap occupancy mostly says when G1 happened to run. Collection is outside the timed
+     * frame window, and every arm pays it at the same boundary, so the retained live set is the
+     * memory quantity a candidate can meaningfully improve.
+     */
+    static MemorySnapshot retainedMemory() {
+        System.gc();
+        return memory();
+    }
 }

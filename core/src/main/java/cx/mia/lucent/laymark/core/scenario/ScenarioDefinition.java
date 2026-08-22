@@ -23,6 +23,7 @@ import java.util.function.Function;
  * @param measure which phases to capture. One name or a list of them; nothing is measured
  *     implicitly, so a scenario that wants spawn generation has to say so even though the world
  *     is always created.
+ * @param weight optional relevance multiplier for this scenario in the composite score
  * @param settings either a name from the config's {@code presets} map or the values written
  *     one field rather than two, so "named and inline at once" is not expressible
  * @param content scene geometry to place before measuring, in declaration order
@@ -33,6 +34,7 @@ public record ScenarioDefinition(
         List<Phase> measure,
         StopSpec stop,
         Integer repetitions,
+        Double weight,
         PresetRef settings,
         Pose pose,
         Long seed,
@@ -59,13 +61,14 @@ public record ScenarioDefinition(
      * @param presets resolves a preset name; called only when the scenario named one
      */
     public ScenarioSpec resolve(Function<String, Preset> presets) {
-        Preset effective = settings == null ? Preset.defaults() : settings.resolve(presets);
+        Preset effective = settings == null ? Preset.empty() : settings.resolve(presets);
 
         return new ScenarioSpec(
                 id,
                 dependsOn,
                 stop == null ? defaultStop() : stop.resolve(effective),
                 repetitions == null ? DEFAULT_REPETITIONS : repetitions,
+                weight == null ? 1.0 : weight,
                 effective,
                 pose == null ? defaultPose() : pose,
                 seed == null ? DEFAULT_SEED : seed,
@@ -94,6 +97,6 @@ public record ScenarioDefinition(
     /** The shortest valid scenario: an id and nothing else. */
     public static ScenarioDefinition of(String id) {
         return new ScenarioDefinition(
-                id, List.of(), null, null, null, null, null, null, null, List.of());
+                id, List.of(), null, null, null, null, null, null, null, null, List.of());
     }
 }

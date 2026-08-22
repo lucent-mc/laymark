@@ -39,7 +39,7 @@ import java.util.TreeSet;
  */
 public final class DependencyOverrides {
 
-    /** File name under {@code config/}, beside {@code laymark.json}. */
+    /** File name under {@code config/}, beside {@code laymark.jsonc}. */
     public static final String FILE_NAME = "laymark-dependencies.json";
 
     public record Overrides(DependencyGraph graph, List<Branching.Conflict> conflicts) {

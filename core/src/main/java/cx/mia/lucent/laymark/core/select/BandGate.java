@@ -1,22 +1,22 @@
 package cx.mia.lucent.laymark.core.select;
 
 import cx.mia.lucent.laymark.core.harness.HarnessException;
-import cx.mia.lucent.laymark.core.stats.Band;
 import cx.mia.lucent.laymark.core.stats.Comparison;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Decides promotion from a candidate's comparisons across every scenario.
+ * Decides eligibility; the composite score decides everything else.
  *
- * <p>This is the gate slice 6 left as a seam. It is deliberately not a threshold on a number: a
- * candidate is promoted on the strength of its {@link Band}s, which already carry the interval and
- * the practical floor, so the rule here is about combining scenarios rather than about statistics.
+ * <p><strong>One number, one rule: top score wins — and Laymark never decides for the
+ * operator.</strong> The score prices every trade the run measured, ranks the lap, and its winner
+ * is promoted whatever the sign, because a lap whose best candidate scores −0.1 is still a
+ * measurement worth having: the run walks the whole pool, the report's cumulative column shows
+ * exactly where returns turned negative, and where to stop the stack is the operator's call. A
+ * benchmark that halted itself on a low number would be making that call for them.
  *
- * <p><strong>Margin-of-error candidates are promoted.</strong> That looks wrong and is required: a
- * mod whose benefit only appears in combination with another presents as no-measurable-difference
- * on its own, and a gate that demanded a clear win would drop it before its partner ever arrived.
- * The stopping rule is a regression, not an absence of gain.
+ * <p>All the gate refuses is the unmeasurable: a candidate with no comparisons cannot be ranked,
+ * and pretending otherwise would put an unmeasured mod into a measured ordering.
  */
 public final class BandGate implements Selection.Gate {
 
@@ -30,32 +30,17 @@ public final class BandGate implements Selection.Gate {
     @Override
     public Selection.Verdict judge(Bundle bundle) {
         List<Comparison> comparisons = byCandidate.get(bundle.candidate());
-        if (comparisons == null || comparisons.isEmpty()) {
-            return Selection.Verdict.BLOCKED;
-        }
-
-        // A regression anywhere blocks promotion, even alongside gains elsewhere. Scenarios are
-        // not interchangeable -- a mod that helps chunk loading and hurts steady render is a
-        // trade, and averaging the two would hide the trade rather than present it.
-        if (comparisons.stream().anyMatch(c -> c.band() == Band.REGRESSED)) {
-            return Selection.Verdict.REGRESSED;
-        }
-        if (comparisons.stream().anyMatch(c -> c.band() == Band.IMPROVED)) {
-            return Selection.Verdict.PROMOTED;
-        }
-        // Everything is negligible or unmeasurable. Promoted anyway, because a combination-only
-        // benefit is indistinguishable from this until its partner is present.
-        return Selection.Verdict.PROMOTED;
+        return comparisons == null || comparisons.isEmpty()
+                ? Selection.Verdict.BLOCKED
+                : Selection.Verdict.PROMOTED;
     }
 
     /**
      * The score a stack is ordered by.
      *
-     * <p>Weighted by scenario so a scenario nobody cares much about cannot outvote one they do. It
-     * is deliberately separate from promotion order: promoting the biggest improver first makes
-     * completion-target scenarios finish faster and the whole run cheaper, but
-     * <strong>runtime must never influence which stack is recommended</strong>, so the two orders
-     * are computed from different things.
+     * <p>Each percentage is weighted by the paired baseline cost it acts on. A 200% change to
+     * 0.001 ms of work is a 0.002 ms change, and must not outvote a 10% change to 10 ms of work.
+     * Operator scenario weights remain multipliers on that cost rather than replacing it.
      */
     public static double weightedScore(List<Comparison> comparisons, Map<String, Double> weights) {
         if (comparisons.isEmpty()) {
@@ -65,8 +50,9 @@ public final class BandGate implements Selection.Gate {
         double weight = 0;
         for (Comparison comparison : comparisons) {
             double scenarioWeight = weights.getOrDefault(comparison.scenarioId(), 1.0);
-            total += comparison.improvementPercent() * scenarioWeight;
-            weight += scenarioWeight;
+            double costWeight = scenarioWeight * comparison.baselineValue();
+            total += comparison.improvementPercent() * costWeight;
+            weight += costWeight;
         }
         return weight == 0 ? 0 : total / weight;
     }

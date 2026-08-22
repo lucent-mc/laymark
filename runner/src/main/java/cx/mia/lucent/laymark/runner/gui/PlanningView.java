@@ -3,6 +3,7 @@ package cx.mia.lucent.laymark.runner.gui;
 import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.experiment.Schedule;
 import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
+import cx.mia.lucent.laymark.core.scenario.ScenarioConfigFile;
 import cx.mia.lucent.laymark.core.select.DependencyGraph;
 import cx.mia.lucent.laymark.runner.select.JarProbe;
 import cx.mia.lucent.laymark.runner.launch.InstalledVersion;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Stream;
+import javax.swing.AbstractButton;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
@@ -80,6 +82,26 @@ public final class PlanningView extends JPanel {
     private static final String VERSION_KEY = "version.";
     private static final String SCHEDULE_KEY = "schedule";
     private static final String INTERVAL_KEY = "baselineInterval";
+    private static final String PROFILE_KEY = "profile";
+
+    /** A DocumentListener for callers who only care that the text changed. */
+    private interface SimpleDocumentListener
+            extends javax.swing.event.DocumentListener, java.util.function.Consumer<Object> {
+        @Override
+        default void insertUpdate(javax.swing.event.DocumentEvent event) {
+            accept(event);
+        }
+
+        @Override
+        default void removeUpdate(javax.swing.event.DocumentEvent event) {
+            accept(event);
+        }
+
+        @Override
+        default void changedUpdate(javax.swing.event.DocumentEvent event) {
+            accept(event);
+        }
+    }
     private static final String DEFAULT_SCHEDULE = "A,B,C,B,C";
     private static final java.util.prefs.Preferences PREFERENCES =
             java.util.prefs.Preferences.userRoot().node("cx/mia/lucent/laymark");
@@ -110,7 +132,7 @@ public final class PlanningView extends JPanel {
     private final JLabel modCount = Theme.muted("");
     private final Map<String, RoleControl> roles = new LinkedHashMap<>();
     private final JTextField search = new JTextField(18);
-    private final JPanel presetRow = row();
+    private final OverflowRow presetRow = new OverflowRow(Theme.muted("Baseline:"));
 
     private final cx.mia.lucent.laymark.runner.select.ProbeCache probeCache =
             cx.mia.lucent.laymark.runner.select.ProbeCache.open();
@@ -148,12 +170,6 @@ public final class PlanningView extends JPanel {
         add(instanceCard(), BorderLayout.NORTH);
         add(candidatesCard(), BorderLayout.CENTER);
 
-        profiles.addActionListener(
-                unused -> {
-                    recallVersion();
-                    refreshConfigStatus();
-                    reloadMods();
-                });
         for (String profile : directories(root.resolve("profiles"))) {
             profiles.addItem(profile);
         }
@@ -163,8 +179,44 @@ public final class PlanningView extends JPanel {
         }
         if (hereProfile != null) {
             profiles.setSelectedItem(hereProfile);
+        } else {
+            // The instance the planner sat in last time, so a crash or a new build reopens on
+            // the same experiment. The jar's own location still wins: where the runner sits is
+            // a stronger statement of intent than where it sat.
+            String remembered = PREFERENCES.get(PROFILE_KEY, null);
+            if (remembered != null && contains(profiles, remembered)) {
+                profiles.setSelectedItem(remembered);
+            }
         }
+        // Attach only after population. JComboBox selects its first added item, and treating that
+        // transient selection as deliberate would create configs in an unrelated profile before
+        // selecting the instance the runner is actually sitting in.
+        profiles.addActionListener(
+                unused -> {
+                    String profile = (String) profiles.getSelectedItem();
+                    if (profile != null) {
+                        PREFERENCES.put(PROFILE_KEY, profile);
+                    }
+                    recallVersion();
+                    refreshConfigStatus();
+                    reloadMods();
+                    planChanged.run();
+                });
         versions.addActionListener(unused -> rememberVersion());
+        // Saved as typed, not on Start: settings that survive only a completed launch are
+        // settings a crash forgets.
+        schedule.getDocument()
+                .addDocumentListener(
+                        (SimpleDocumentListener)
+                                unused -> {
+                                    PREFERENCES.put(SCHEDULE_KEY, schedule.getText().trim());
+                                    planChanged.run();
+                                });
+        baselineInterval.addChangeListener(
+                unused -> {
+                    PREFERENCES.putInt(INTERVAL_KEY, (Integer) baselineInterval.getValue());
+                    planChanged.run();
+                });
         recallVersion();
         refreshConfigStatus();
         reloadMods();
@@ -229,32 +281,22 @@ public final class PlanningView extends JPanel {
         constraints.gridx = 1;
         constraints.weightx = 1;
         constraints.anchor = java.awt.GridBagConstraints.WEST;
+        // Filled, not floated: the row must be told the cell's real width, or it lays out at its
+        // one-line preferred width and the surplus is clipped off the sidebar's edge.
+        constraints.fill = java.awt.GridBagConstraints.HORIZONTAL;
         constraints.insets = new java.awt.Insets(y == 0 ? 0 : 6, 0, 0, 0);
         grid.add(value, constraints);
     }
 
     /** Opens the config in whatever edits JSON here; the file is the interface, not this window. */
     private void editConfig() {
-        Path path = configPath();
         try {
-            if (!Files.isRegularFile(path)) {
-                Files.createDirectories(path.getParent());
-                Files.writeString(
-                        path,
-                        """
-                        {
-                          "version": 1,
-                          "settingsPresets": {},
-                          "scenarios": []
-                        }
-                        """,
-                        StandardCharsets.UTF_8);
-            }
+            Path path = ScenarioConfigFile.ensureExists(gameDirectory());
             java.awt.Desktop.getDesktop().open(path.toFile());
         } catch (java.io.IOException | RuntimeException e) {
             javax.swing.JOptionPane.showMessageDialog(
                     this,
-                    "Could not open " + path + ": " + e.getMessage(),
+                    "Could not open " + configPath() + ": " + e.getMessage(),
                     "Edit config",
                     javax.swing.JOptionPane.ERROR_MESSAGE);
         }
@@ -263,10 +305,9 @@ public final class PlanningView extends JPanel {
     /**
      * Reads the instance's own config and says what it holds.
      *
-     * <p>Not a file picker. {@code config/laymark.json} is the single source of what a run measures
+     * <p>Not a file picker. {@code config/laymark.jsonc} is the single source of what a run measures
      * — the harness reads it from inside the game — so the planner reports on it rather than
-     * offering to point somewhere the harness will not look. Laymark ships no scenarios; what is
-     * worth measuring is a property of the pack and of whoever is tuning it.
+     * offering to point somewhere the harness will not look.
      */
     private void refreshConfigStatus() {
         String profile = (String) profiles.getSelectedItem();
@@ -274,13 +315,8 @@ public final class PlanningView extends JPanel {
             configStatus.setText("—");
             return;
         }
-        Path path = configPath();
-        if (!Files.isRegularFile(path)) {
-            configStatus.setForeground(Theme.BAD);
-            configStatus.setText(Laymark.CONFIG_PATH + " is missing — write your scenarios there");
-            return;
-        }
         try {
+            Path path = ScenarioConfigFile.ensureExists(gameDirectory());
             var scenarios =
                     ConfigCodec.read(Files.readString(path, StandardCharsets.UTF_8)).scenarios();
             configStatus.setForeground(Theme.MUTED);
@@ -292,7 +328,7 @@ public final class PlanningView extends JPanel {
                                     .orElse(""));
         } catch (RuntimeException | java.io.IOException e) {
             configStatus.setForeground(Theme.BAD);
-            configStatus.setText(Laymark.CONFIG_PATH + " does not parse: " + e.getMessage());
+            configStatus.setText(Laymark.CONFIG_PATH + " could not be read: " + e.getMessage());
         }
     }
 
@@ -325,10 +361,21 @@ public final class PlanningView extends JPanel {
                 BorderLayout.WEST);
         legend.add(modCount, BorderLayout.EAST);
 
-        JPanel top = new JPanel(new BorderLayout(8, 0));
+        // Presets and search on their own lines: they answer different questions ("what is the
+        // baseline" vs "where is that mod"), and sharing a row made the presets read as search
+        // controls.
+        JPanel top = new JPanel();
+        top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
         top.setOpaque(false);
-        top.add(presets(), BorderLayout.WEST);
-        top.add(search, BorderLayout.CENTER);
+        JPanel presetLine = presets();
+        presetLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JPanel searchLine = new JPanel(new BorderLayout());
+        searchLine.setOpaque(false);
+        searchLine.add(search, BorderLayout.CENTER);
+        searchLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        searchLine.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        top.add(presetLine);
+        top.add(searchLine);
 
         JPanel body = new JPanel(new BorderLayout(0, 8));
         body.setOpaque(false);
@@ -357,6 +404,14 @@ public final class PlanningView extends JPanel {
                     .filter(entry -> entry.getValue() > 0)
                     .sorted(Map.Entry.<RoleControl, Integer>comparingByValue().reversed())
                     .forEach(entry -> modList.add(entry.getKey()));
+        }
+        // Striped by visible position, not roster position: the stripe exists to carry the eye
+        // from a name to its buttons across the row's width, and a filtered list re-stripes.
+        int visible = 0;
+        for (Component component : modList.getComponents()) {
+            if (component instanceof RoleControl row) {
+                row.stripe(visible++ % 2 == 1);
+            }
         }
         modList.add(Box.createVerticalGlue());
         modList.revalidate();
@@ -416,35 +471,107 @@ public final class PlanningView extends JPanel {
      * would be a second way to say something the roster already says.
      */
     private JPanel presets() {
-        presetRow.removeAll();
-        presetRow.add(Theme.muted("Baseline:"));
+        // Short labels, full names in the tooltip: the sidebar's narrow states are supported
+        // states, and a preset whose label truncates to "Pack min…" has stopped saying what it
+        // does. Whatever still does not fit folds behind the row's "…" menu instead of clipping.
+        presetRow.clearItems();
 
-        JButton minusCandidates = Theme.button("Pack minus candidates", false);
+        JButton minusCandidates = Theme.button("Pack", false);
         minusCandidates.setToolTipText(
-                "Everything installed stays in the baseline except the candidates. Answers: what"
-                        + " does this mod add to the pack as it stands?");
+                tooltip(
+                        "Pack minus candidates",
+                        "Everything installed stays in the baseline except the candidates."
+                                + " Answers: what does this mod add to the pack as it stands?"));
         minusCandidates.addActionListener(unused -> assign(name -> Role.BASELINE));
-        presetRow.add(minusCandidates);
+        presetRow.addItem(minusCandidates);
 
-        JButton blank = Theme.button("Blank slate", false);
+        JButton blank = Theme.button("Blank", false);
         blank.setToolTipText(
-                "Nothing but the candidates and whatever they require. Answers: what does this mod"
-                        + " do on its own?");
+                tooltip(
+                        "Blank slate",
+                        "Nothing but the candidates and whatever they require. Answers: what does"
+                                + " this mod do on its own?"));
         blank.addActionListener(unused -> assign(name -> Role.OFF));
-        presetRow.add(blank);
+        presetRow.addItem(blank);
 
         // Only offered when there is an index to read. A button that silently means "vanilla"
         // because no ancestry was recorded is a button that has answered a different question.
         Set<String> added = inlayLayer();
         if (added != null) {
-            JButton parent = Theme.button("Inlay parent minus candidates", false);
+            JButton parent = Theme.button("Inlay parent", false);
             parent.setToolTipText(
-                    "Everything this layer adds is withheld, so candidates are measured against the"
-                            + " layer underneath. For a root layer that parent is vanilla.");
+                    tooltip(
+                            "Inlay parent minus candidates",
+                            "Everything this layer adds is withheld, so candidates are measured"
+                                    + " against the layer underneath. For a root layer that parent"
+                                    + " is vanilla."));
             parent.addActionListener(unused -> assignInlayParent());
-            presetRow.add(parent);
+            presetRow.addItem(parent);
         }
+
+        // Only offered when a previous run promoted something: continuing from nothing is the
+        // Blank slate button, not this one wearing a misleading name.
+        List<String> winners = previousWinners();
+        if (!winners.isEmpty()) {
+            JButton previous = Theme.button("Last winners", false);
+            previous.setToolTipText(
+                    tooltip(
+                            "Previous run's winners",
+                            "Blank slate plus what the last run promoted: "
+                                    + String.join(", ", winners)
+                                    + ". Candidates are measured against the stack the last"
+                                    + " selection arrived at, so runs chain instead of starting"
+                                    + " over."));
+            previous.addActionListener(
+                    unused -> assign(name -> winners.contains(name) ? Role.BASELINE : Role.OFF));
+            presetRow.addItem(previous);
+        }
+        presetRow.revalidate();
+        presetRow.repaint();
         return presetRow;
+    }
+
+    /** The preset's full name over its explanation, wrapped: the label only had to be short. */
+    private static String tooltip(String fullName, String explanation) {
+        return "<html><body style='width: 280px'><b>" + fullName + "</b><br>" + explanation
+                + "</body></html>";
+    }
+
+    /**
+     * What the most recent selection in this profile promoted, by file name; empty when there is
+     * no previous run, its report is unreadable, or nothing won.
+     *
+     * <p>Read from the newest {@code .laymark/<runId>/experiment.json}. Only winners still
+     * installed count — a stack member since uninstalled cannot be a baseline entry, and silently
+     * dropping it beats refusing the preset over a mod the operator already removed.
+     */
+    private List<String> previousWinners() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            return List.of();
+        }
+        Path workDir = root.resolve("profiles").resolve(profile).resolve(Laymark.WORK_DIR);
+        if (!Files.isDirectory(workDir)) {
+            return List.of();
+        }
+        try (Stream<Path> runs = Files.list(workDir)) {
+            Path newest =
+                    runs.filter(Files::isDirectory)
+                            .filter(run -> Files.isRegularFile(run.resolve("experiment.json")))
+                            .max(java.util.Comparator.comparing(run -> run.getFileName().toString()))
+                            .orElse(null);
+            if (newest == null) {
+                return List.of();
+            }
+            var report =
+                    cx.mia.lucent.laymark.core.report.ReportCodec.read(
+                            Files.readString(
+                                    newest.resolve("experiment.json"), StandardCharsets.UTF_8));
+            return report.stack().stream().filter(roles::containsKey).toList();
+        } catch (java.io.IOException | RuntimeException e) {
+            // An unreadable old report costs a convenience button, nothing more.
+            return List.of();
+        }
     }
 
     private Set<String> inlayLayer() {
@@ -469,6 +596,8 @@ public final class PlanningView extends JPanel {
                 });
         updateDependencyNotes();
         updateCount();
+        saveRoles();
+        planChanged.run();
     }
 
     private void assignInlayParent() {
@@ -516,9 +645,214 @@ public final class PlanningView extends JPanel {
     }
 
     private static JPanel row() {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel row = new JPanel(new WrapRow());
         row.setOpaque(false);
         return row;
+    }
+
+    /**
+     * A left-to-right row that wraps to more lines when narrow and reports its true height.
+     *
+     * <p>FlowLayout wraps its children but keeps claiming one line of height, so in a narrow
+     * sidebar the wrapped components painted under the next form row or vanished off the edge.
+     * This one returns the height the wrapping actually needs — and because GridBagLayout sizes
+     * cells from a preferred size computed before the final width is known, it revalidates itself
+     * once when it discovers its laid-out height is stale, which settles in one extra pass.
+     */
+    private static final class WrapRow implements java.awt.LayoutManager {
+
+        private static final int HGAP = 8;
+        private static final int VGAP = 4;
+
+        @Override
+        public void addLayoutComponent(String name, Component component) {}
+
+        @Override
+        public void removeLayoutComponent(Component component) {}
+
+        @Override
+        public Dimension preferredLayoutSize(java.awt.Container parent) {
+            return layout(parent, parent.getWidth() > 0 ? parent.getWidth() : Integer.MAX_VALUE, false);
+        }
+
+        @Override
+        public Dimension minimumLayoutSize(java.awt.Container parent) {
+            // Narrower is answered by wrapping, so the minimum width is nearly nothing; the
+            // height is whatever the current width's wrapping needs.
+            return new Dimension(40, preferredLayoutSize(parent).height);
+        }
+
+        @Override
+        public void layoutContainer(java.awt.Container parent) {
+            Dimension needed = layout(parent, parent.getWidth(), true);
+            if (needed.height != parent.getHeight()) {
+                javax.swing.SwingUtilities.invokeLater(parent::revalidate);
+            }
+        }
+
+        private record Placed(Component component, int x, int width, int height) {}
+
+        private Dimension layout(java.awt.Container parent, int width, boolean apply) {
+            List<Placed> line = new ArrayList<>();
+            int x = 0;
+            int y = 0;
+            int lineHeight = 0;
+            int widest = 0;
+            for (Component child : parent.getComponents()) {
+                if (!child.isVisible()) {
+                    continue;
+                }
+                Dimension pref = child.getPreferredSize();
+                int childWidth = Math.min(pref.width, width);
+                if (x > 0 && x + HGAP + childWidth > width) {
+                    if (apply) {
+                        place(line, y, lineHeight);
+                    }
+                    line.clear();
+                    y += lineHeight + VGAP;
+                    x = 0;
+                    lineHeight = 0;
+                }
+                if (x > 0) {
+                    x += HGAP;
+                }
+                line.add(new Placed(child, x, childWidth, pref.height));
+                x += childWidth;
+                lineHeight = Math.max(lineHeight, pref.height);
+                widest = Math.max(widest, x);
+            }
+            if (apply) {
+                place(line, y, lineHeight);
+            }
+            return new Dimension(widest, y + lineHeight);
+        }
+
+        /** Sets one line's bounds, centred on the line's own axis. */
+        private static void place(List<Placed> line, int lineY, int lineHeight) {
+            for (Placed placed : line) {
+                placed.component()
+                        .setBounds(
+                                placed.x(),
+                                lineY + (lineHeight - placed.height()) / 2,
+                                placed.width(),
+                                placed.height());
+            }
+        }
+    }
+
+    /**
+     * A single-line row of buttons that folds what does not fit behind a "…" menu.
+     *
+     * <p>The alternative behaviours are both worse: a FlowLayout clips trailing buttons without a
+     * trace, and truncated labels stop saying what the button does. Buttons keep their declared
+     * order; the first one that does not fit and everything after it move into the menu, so the
+     * row never shows a gap-toothed subset.
+     */
+    private static final class OverflowRow extends JPanel {
+
+        private static final int GAP = 8;
+
+        private final Component caption;
+        private final List<AbstractButton> items = new ArrayList<>();
+        private final JButton more = Theme.button("…", false);
+
+        OverflowRow(Component caption) {
+            super(null); // laid out by hand in doLayout
+            setOpaque(false);
+            this.caption = caption;
+            more.setToolTipText("The presets that do not fit");
+            more.addActionListener(unused -> menu());
+            add(caption);
+            add(more);
+        }
+
+        void clearItems() {
+            items.forEach(this::remove);
+            items.clear();
+        }
+
+        void addItem(AbstractButton button) {
+            items.add(button);
+            add(button);
+        }
+
+        /** The hidden buttons as menu entries, delegating to the buttons so behaviour has one home. */
+        private void menu() {
+            var popup = new javax.swing.JPopupMenu();
+            for (AbstractButton hidden : items) {
+                if (hidden.isVisible()) {
+                    continue;
+                }
+                var item = new javax.swing.JMenuItem(hidden.getText());
+                item.setToolTipText(hidden.getToolTipText());
+                item.setEnabled(hidden.isEnabled());
+                item.addActionListener(unused -> hidden.doClick());
+                popup.add(item);
+            }
+            popup.show(more, 0, more.getHeight());
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            int width = caption.getPreferredSize().width;
+            int height = caption.getPreferredSize().height;
+            for (AbstractButton item : items) {
+                width += GAP + item.getPreferredSize().width;
+                height = Math.max(height, item.getPreferredSize().height);
+            }
+            return new Dimension(width, Math.max(height, more.getPreferredSize().height));
+        }
+
+        @Override
+        public Dimension getMinimumSize() {
+            return new Dimension(
+                    caption.getPreferredSize().width + GAP + more.getPreferredSize().width,
+                    getPreferredSize().height);
+        }
+
+        @Override
+        public Dimension getMaximumSize() {
+            return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+        }
+
+        @Override
+        public void doLayout() {
+            int width = getWidth();
+            int height = getHeight();
+            int x = 0;
+            place(caption, x, height);
+            x += caption.getPreferredSize().width;
+
+            int needed = 0;
+            for (AbstractButton item : items) {
+                needed += GAP + item.getPreferredSize().width;
+            }
+            boolean allFit = x + needed <= width;
+            int reserved = allFit ? 0 : GAP + more.getPreferredSize().width;
+
+            boolean overflowing = false;
+            for (AbstractButton item : items) {
+                int itemWidth = item.getPreferredSize().width;
+                if (!overflowing && x + GAP + itemWidth + reserved <= width) {
+                    x += GAP;
+                    place(item, x, height);
+                    x += itemWidth;
+                    item.setVisible(true);
+                } else {
+                    overflowing = true;
+                    item.setVisible(false);
+                }
+            }
+            more.setVisible(!allFit);
+            if (!allFit) {
+                place(more, x + GAP, height);
+            }
+        }
+
+        private static void place(Component component, int x, int rowHeight) {
+            Dimension pref = component.getPreferredSize();
+            component.setBounds(x, (rowHeight - pref.height) / 2, pref.width, pref.height);
+        }
     }
 
     private void reloadMods() {
@@ -530,9 +864,11 @@ public final class PlanningView extends JPanel {
             for (String name : installed(gameDirectory)) {
                 roles.put(name, new RoleControl(display(name), name, this::roleChanged));
             }
+            restoreRoles(gameDirectory);
         }
         refilter();
         presets();
+        updateDependencyNotes();
         updateCount();
         revalidate();
         repaint();
@@ -541,6 +877,124 @@ public final class PlanningView extends JPanel {
     private void roleChanged() {
         updateDependencyNotes();
         updateCount();
+        saveRoles();
+        planChanged.run();
+    }
+
+    // --- the live plan preview's window into the form ---
+
+    private Runnable planChanged = () -> {};
+
+    /**
+     * Called whenever the operator changes something that reshapes the plan: a role toggle, a
+     * preset, the schedule, the interval, the instance. Not called for system-driven reloads
+     * (unlock after a run), so finished results are not wiped by the run that produced them.
+     */
+    public void onPlanChanged(Runnable listener) {
+        planChanged = listener;
+    }
+
+    /** The candidate files in roster order, as display names. */
+    public List<String> candidateDisplays() {
+        return roles.entrySet().stream()
+                .filter(entry -> entry.getValue().role() == Role.CANDIDATE)
+                .map(entry -> display(entry.getKey()))
+                .toList();
+    }
+
+    /**
+     * The stable identity of the candidate roster, in display order.
+     *
+     * <p>Display names are deliberately not identities: two jars may advertise the same mod name.
+     * The runner uses this list to decide whether finished results still describe the plan being
+     * edited.
+     */
+    public List<String> candidateFiles() {
+        return roles.entrySet().stream()
+                .filter(entry -> entry.getValue().role() == Role.CANDIDATE)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    /** The schedule as currently typed, or null while the text does not parse. */
+    public Schedule previewSchedule() {
+        try {
+            return new Schedule(
+                    cx.mia.lucent.laymark.core.experiment.RoundTemplate.parse(schedule.getText()),
+                    (Integer) baselineInterval.getValue());
+        } catch (RuntimeException invalid) {
+            return null;
+        }
+    }
+
+    /** The selected instance's game directory, or null before one is chosen. */
+    public Path previewGameDirectory() {
+        return profiles.getSelectedItem() == null ? null : gameDirectory();
+    }
+
+    /**
+     * Where the roster's assignments survive a crash or a new build: beside the instance's own
+     * run outputs, because the assignments describe that instance's mods and nothing else.
+     */
+    private Path plannerFile(Path gameDirectory) {
+        return gameDirectory.resolve(Laymark.WORK_DIR).resolve("planner.json");
+    }
+
+    /** Saved on every change, not on Start — a plan that survives only a completed launch is a
+     * plan a crash forgets. Best-effort: a cache that cannot be written must not block planning. */
+    private void saveRoles() {
+        String profile = (String) profiles.getSelectedItem();
+        if (profile == null) {
+            return;
+        }
+        Map<String, String> assignments = new LinkedHashMap<>();
+        roles.forEach((name, control) -> assignments.put(name, control.role().name()));
+        Path file = plannerFile(gameDirectory());
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(
+                    file,
+                    new com.google.gson.GsonBuilder()
+                            .setPrettyPrinting()
+                            .create()
+                            .toJson(assignments),
+                    StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            System.err.println("could not save planner state to " + file + ": " + e.getMessage());
+        }
+    }
+
+    /** Reapplies saved assignments to files that still exist; a renamed jar starts over. */
+    private void restoreRoles(Path gameDirectory) {
+        Path file = plannerFile(gameDirectory);
+        if (!Files.isRegularFile(file)) {
+            return;
+        }
+        try {
+            Map<String, String> saved =
+                    new com.google.gson.Gson()
+                            .fromJson(
+                                    Files.readString(file, StandardCharsets.UTF_8),
+                                    new com.google.gson.reflect.TypeToken<
+                                            Map<String, String>>() {}.getType());
+            if (saved == null) {
+                return;
+            }
+            saved.forEach(
+                    (name, roleName) -> {
+                        RoleControl control = roles.get(name);
+                        if (control == null) {
+                            return;
+                        }
+                        try {
+                            control.set(Role.valueOf(roleName));
+                        } catch (IllegalArgumentException unknownRole) {
+                            // A newer file's vocabulary; the default assignment stands.
+                        }
+                    });
+        } catch (java.io.IOException | RuntimeException e) {
+            System.err.println("could not restore planner state from " + file + ": " + e.getMessage());
+        }
     }
 
     /**
@@ -644,6 +1098,39 @@ public final class PlanningView extends JPanel {
         }
     }
 
+    /**
+     * Locks or unlocks planning around a run.
+     *
+     * <p>The roster stays visible while an experiment executes — its rows carry the per-arm
+     * status — but a toggle that appeared to change a running experiment would be lying, so
+     * everything that shapes the next run is disabled until the current one finishes. Search
+     * stays live: finding a row is reading, not planning. Unlocking rebuilds the preset row so
+     * "Previous run's winners" reflects the run that just ended.
+     */
+    public void setPlanningEnabled(boolean enabled) {
+        profiles.setEnabled(enabled);
+        versions.setEnabled(enabled);
+        schedule.setEnabled(enabled);
+        baselineInterval.setEnabled(enabled);
+        roles.values().forEach(control -> control.lock(!enabled));
+        for (Component component : presetRow.getComponents()) {
+            component.setEnabled(enabled);
+        }
+        if (enabled) {
+            presets();
+            revalidate();
+            repaint();
+        }
+    }
+
+    /** The live state of a candidate's arm, shown on its roster row during a run. */
+    public void armStatus(String fileName, String text, java.awt.Color colour) {
+        RoleControl control = roles.get(fileName);
+        if (control != null) {
+            control.status(text, colour);
+        }
+    }
+
     private static String shorten(String fileName) {
         return fileName.replaceFirst("\\.jar$", "");
     }
@@ -670,6 +1157,7 @@ public final class PlanningView extends JPanel {
 
         private final Map<Role, JToggleButton> buttons = new LinkedHashMap<>();
         private final JPanel notes = new JPanel();
+        private final JLabel runState = new JLabel("");
 
         RoleControl(String displayName, String fileName, Runnable onChange) {
             setLayout(new BorderLayout(8, 0));
@@ -698,6 +1186,8 @@ public final class PlanningView extends JPanel {
             ButtonGroup group = new ButtonGroup();
             JPanel choices = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
             choices.setOpaque(false);
+            runState.setFont(runState.getFont().deriveFont(11f));
+            choices.add(runState);
             for (Role role : Role.values()) {
                 JToggleButton button = new JToggleButton(label(role));
                 button.setFocusPainted(false);
@@ -712,6 +1202,25 @@ public final class PlanningView extends JPanel {
 
             add(text, BorderLayout.CENTER);
             add(choices, BorderLayout.EAST);
+        }
+
+        /** Alternating background, so the eye can follow a name to its buttons across the width. */
+        void stripe(boolean shaded) {
+            setOpaque(shaded);
+            setBackground(Theme.RAISED);
+        }
+
+        /** The arm's live state during a run — queued, running, done, failed — beside the toggles. */
+        void status(String text, java.awt.Color colour) {
+            runState.setText(text);
+            runState.setForeground(colour);
+        }
+
+        void lock(boolean locked) {
+            buttons.values().forEach(button -> button.setEnabled(!locked));
+            if (!locked) {
+                runState.setText("");
+            }
         }
 
         /** What this row's bundle carries, one line per dependency; empty clears it. */
@@ -943,10 +1452,13 @@ public final class PlanningView extends JPanel {
 
     /** The selected profile's own config; the only place scenarios come from. */
     private Path configPath() {
+        return ScenarioConfigFile.path(gameDirectory());
+    }
+
+    private Path gameDirectory() {
         String profile = (String) profiles.getSelectedItem();
         return root.resolve("profiles")
-                .resolve(profile == null ? "" : profile)
-                .resolve(Laymark.CONFIG_PATH);
+                .resolve(profile == null ? "" : profile);
     }
 
     /** Why {@link #choice()} returned nothing, phrased for whoever is looking at the form. */

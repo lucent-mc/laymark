@@ -20,7 +20,7 @@ public final class Laymark {
      * protocol did not change; a genuine protocol change fails immediately and legibly rather
      * than misparsing.
      */
-    public static final int PROTOCOL_VERSION = 1;
+    public static final int PROTOCOL_VERSION = 2;
 
     /**
      * System property carrying the loopback port the runner is listening on.
@@ -40,12 +40,13 @@ public final class Laymark {
     /**
      * The scenario config, relative to the instance's game directory.
      *
-     * <p><strong>Hand-authored, and the single source of what a run measures.</strong> The runner
-     * never writes it. Both sides resolve the same document — the runner for scheduling and the
-     * harness for execution — so there is no separate plan file to drift from it; the resolved
-     * plan is archived beside the results, never inside the instance.
+     * <p><strong>Hand-authored, and the single source of what a run measures.</strong> Both entry
+     * points create it from the complete commented reference when missing, then never overwrite
+     * it. Both sides resolve the same document — the runner for scheduling and the harness for
+     * execution — so there is no separate plan file to drift from it; the resolved plan is
+     * archived beside the results, never inside the instance.
      */
-    public static final String CONFIG_PATH = "config/laymark.json";
+    public static final String CONFIG_PATH = "config/laymark.jsonc";
 
     /**
      * Laymark's working directory inside the instance: cache and measurements, never configuration.

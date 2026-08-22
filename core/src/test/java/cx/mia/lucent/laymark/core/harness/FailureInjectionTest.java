@@ -61,14 +61,7 @@ class FailureInjectionTest {
             // sequence added for this hazard.
             Preset effective =
                     driftAfterCapture && readbacks > 1
-                            ? new Preset(
-                                    8,
-                                    requested.simulationDistance(),
-                                    requested.particles(),
-                                    requested.clouds(),
-                                    requested.entityShadows(),
-                                    requested.biomeBlendRadius(),
-                                    requested.fieldOfView())
+                            ? Preset.ofMinecraft(java.util.Map.of("renderDistance", "8"))
                             : applied;
             return new PresetReadback(effective, 1600, 900, false);
         }
@@ -158,7 +151,8 @@ class FailureInjectionTest {
                         ? StopCondition.time(Duration.ofSeconds(1))
                         : StopCondition.chunks(100, Duration.ofSeconds(1)),
                 1,
-                Preset.defaults(),
+                // Chunk-stopped scenarios must pin the render distance the target derives from.
+                Preset.ofMinecraft(java.util.Map.of("renderDistance", "12")),
                 Pose.lookingDown(0.5, 200, 0.5),
                 1L,
                 List.of(phase),
@@ -285,21 +279,13 @@ class FailureInjectionTest {
 
     @Test
     void parityNamesTheArmThatDiffered() {
-        Preset defaults = Preset.defaults();
-        Preset drifted =
-                new Preset(
-                        8,
-                        defaults.simulationDistance(),
-                        defaults.particles(),
-                        defaults.clouds(),
-                        defaults.entityShadows(),
-                        defaults.biomeBlendRadius(),
-                        defaults.fieldOfView());
+        Preset pinned = Preset.ofMinecraft(java.util.Map.of("renderDistance", "12"));
+        Preset drifted = Preset.ofMinecraft(java.util.Map.of("renderDistance", "8"));
         var mismatches =
                 Parity.compare(
                         "render",
                         "baseline",
-                        new PresetReadback(defaults, 1600, 900, false),
+                        new PresetReadback(pinned, 1600, 900, false),
                         "sodium",
                         new PresetReadback(drifted, 1600, 900, false));
         assertEquals(1, mismatches.size());
@@ -309,7 +295,7 @@ class FailureInjectionTest {
 
     @Test
     void parityCatchesAFramebufferOnlyDifference() {
-        Preset defaults = Preset.defaults();
+        Preset defaults = Preset.empty();
         var mismatches =
                 Parity.compare(
                         "render",

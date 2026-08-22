@@ -28,4 +28,9 @@ class LaymarkTest {
         assertTrue(Laymark.PROPERTY_PORT.startsWith(Laymark.ID + "."));
         assertTrue(Laymark.PROPERTY_TOKEN.startsWith(Laymark.ID + "."));
     }
+
+    @Test
+    void scenarioConfigUsesOnlyTheJsoncPath() {
+        assertEquals("config/laymark.jsonc", Laymark.CONFIG_PATH);
+    }
 }

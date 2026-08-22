@@ -78,7 +78,7 @@ public final class Harness {
             }
 
             RunPlan plan = readPlan();
-            MinecraftHarnessPort port = new MinecraftHarnessPort(channels);
+            MinecraftHarnessPort port = new MinecraftHarnessPort(channels, plan.window());
 
             // Liveness, decoupled from progress: a 30-minute capture emits no progress frames,
             // and without this it is indistinguishable from a hang until the full run timeout
@@ -131,8 +131,18 @@ public final class Harness {
      */
     private static RunResult withChannelFlags(RunResult result, MinecraftHarnessPort port) {
         List<String> flags = new ArrayList<>(result.flags());
-        if (port.gpuUnavailableReason() != null) {
-            flags.add("gpu timing unavailable: " + port.gpuUnavailableReason());
+        // A channel-status question is metadata about a run whose measurements are already
+        // complete. If the client thread cannot answer -- it can be deep in the final world's
+        // save at this point -- the honest outcome is a flag saying so, not a failed run: a
+        // 40-minute arm died here once because a diagnostic getter timed out.
+        String gpu;
+        try {
+            gpu = port.gpuUnavailableReason();
+        } catch (cx.mia.lucent.laymark.core.harness.HarnessException unanswerable) {
+            gpu = "status unknown; " + unanswerable.getMessage();
+        }
+        if (gpu != null) {
+            flags.add("gpu timing unavailable: " + gpu);
         }
         if (port.sparkUnavailableReason() != null) {
             flags.add("server statistics unavailable: " + port.sparkUnavailableReason());
@@ -162,7 +172,7 @@ public final class Harness {
     /**
      * Resolves the hand-authored config into this launch's plan.
      *
-     * <p>{@code config/laymark.json} is the single source of what a run measures; the runner reads
+     * <p>{@code config/laymark.jsonc} is the single source of what a run measures; the runner reads
      * the same file, so the two sides cannot drift. The only run-shaped facts the config cannot
      * carry — which run this is and where its results go — arrive as system properties on the
      * command line the runner assembled.

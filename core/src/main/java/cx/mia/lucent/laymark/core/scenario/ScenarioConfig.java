@@ -24,11 +24,16 @@ import java.util.Map;
  * this type only says what a scenario is allowed to declare.
  *
  * @param version schema version of this document, checked on read
+ * @param scoreWeights relative importance of independently normalized speed and retained heap
  * @param settingsPresets reusable settings bundles, referenced by name from a scenario
  * @param scenarios in declaration order
  */
 public record ScenarioConfig(
-        int version, Map<String, Preset> settingsPresets, List<ScenarioDefinition> scenarios) {
+        int version,
+        cx.mia.lucent.laymark.core.plan.WindowSize window,
+        cx.mia.lucent.laymark.core.plan.ScoreWeights scoreWeights,
+        Map<String, Preset> settingsPresets,
+        List<ScenarioDefinition> scenarios) {
 
     /** Bumped only when an existing document would be read wrongly rather than merely partially. */
     public static final int SCHEMA_VERSION = 1;
@@ -39,6 +44,11 @@ public record ScenarioConfig(
                     "config schema version " + version + " is not supported; this build reads "
                             + SCHEMA_VERSION);
         }
+        window = window == null ? cx.mia.lucent.laymark.core.plan.WindowSize.DEFAULT : window;
+        scoreWeights =
+                scoreWeights == null
+                        ? cx.mia.lucent.laymark.core.plan.ScoreWeights.DEFAULT
+                        : scoreWeights;
         settingsPresets = settingsPresets == null ? Map.of() : Map.copyOf(settingsPresets);
         if (scenarios == null || scenarios.isEmpty()) {
             throw new PlanException("config declares no scenarios");
@@ -70,7 +80,7 @@ public record ScenarioConfig(
         for (ScenarioDefinition definition : scenarios) {
             resolved.add(definition.resolve(this::preset));
         }
-        return RunPlan.of(runId, outputDirectory, resolved);
+        return RunPlan.of(runId, outputDirectory, window, scoreWeights, resolved);
     }
 
     /**
@@ -88,6 +98,16 @@ public record ScenarioConfig(
 
     /** A config with one scenario and no named presets, for tests and for a minimal invocation. */
     public static ScenarioConfig of(ScenarioDefinition... scenarios) {
-        return new ScenarioConfig(SCHEMA_VERSION, new LinkedHashMap<>(), List.of(scenarios));
+        return new ScenarioConfig(
+                SCHEMA_VERSION, null, null, new LinkedHashMap<>(), List.of(scenarios));
+    }
+
+    /** Source-compatible shape from before score weights became configurable. */
+    public ScenarioConfig(
+            int version,
+            cx.mia.lucent.laymark.core.plan.WindowSize window,
+            Map<String, Preset> settingsPresets,
+            List<ScenarioDefinition> scenarios) {
+        this(version, window, null, settingsPresets, scenarios);
     }
 }

@@ -96,6 +96,8 @@ public final class ExperimentRun {
                         new RunPlan(
                                 plan.runId(),
                                 plan.protocolVersion(),
+                                plan.window(),
+                                plan.scoreWeights(),
                                 plan.scenarios(),
                                 armOutput.toString());
                 RunResult result;
@@ -250,21 +252,9 @@ public final class ExperimentRun {
      * observe windows of different length and only cost-per-unit-of-work compares.
      */
     static double scored(ScenarioResult scenario, RunPlan plan) {
-        var spec =
-                plan.scenarios().stream()
-                        .filter(s -> s.id().equals(scenario.scenarioId()))
-                        .findFirst()
-                        .orElseThrow();
-        if (spec.stopCondition().kind() == cx.mia.lucent.laymark.core.plan.StopCondition.Kind.CHUNKS) {
-            Double perChunk =
-                    scenario.segments().get(scenario.segments().size() - 1)
-                            .summaries()
-                            .millisPerChunkReceived();
-            if (perChunk != null) {
-                return perChunk;
-            }
-        }
-        return scenario.statistics().meanMillis();
+        // One extraction, shared with the mod's live stream: the number that arrives mid-arm and
+        // the number read from the result file must be the same number.
+        return cx.mia.lucent.laymark.core.result.Channels.of(scenario, plan).scoredMillis();
     }
 
     private static boolean hasScenario(List<Measured> measured, int sequence, String scenarioId) {

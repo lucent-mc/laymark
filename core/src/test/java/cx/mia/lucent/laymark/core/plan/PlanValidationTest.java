@@ -58,9 +58,13 @@ class PlanValidationTest {
     void runPlanRejectsAnImpossibleProtocolVersion() {
         var scenarios = List.of(ScenarioSpec.of("a", ANY));
         assertAll(
-                () -> assertThrows(PlanException.class, () -> new RunPlan("r", 0, scenarios, "out")),
                 () ->
                         assertThrows(
-                                PlanException.class, () -> new RunPlan("r", -5, scenarios, "out")));
+                                PlanException.class,
+                                () -> new RunPlan("r", 0, null, scenarios, "out")),
+                () ->
+                        assertThrows(
+                                PlanException.class,
+                                () -> new RunPlan("r", -5, null, scenarios, "out")));
     }
 }

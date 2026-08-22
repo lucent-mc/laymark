@@ -13,11 +13,18 @@ import java.util.List;
  *
  * @param runId unique per launch; every disposable save embeds it, so collisions are impossible
  * @param protocolVersion exact-matched at handshake, independent of the product version
+ * @param scoreWeights relative importance of independently normalized speed and memory results
  * @param scenarios in declaration order; call {@link #executionOrder()} for dependency order
  * @param outputDirectory where results are written, outside the instance
  */
+ /* @param window the run's window size — a stratum, one value for the whole launch */
 public record RunPlan(
-        String runId, int protocolVersion, List<ScenarioSpec> scenarios, String outputDirectory) {
+        String runId,
+        int protocolVersion,
+        WindowSize window,
+        ScoreWeights scoreWeights,
+        List<ScenarioSpec> scenarios,
+        String outputDirectory) {
 
     public RunPlan {
         if (runId == null || runId.isBlank()) {
@@ -36,7 +43,12 @@ public record RunPlan(
         if (outputDirectory == null || outputDirectory.isBlank()) {
             throw new PlanException("run " + runId + " has no output directory");
         }
+        window = window == null ? WindowSize.DEFAULT : window;
+        scoreWeights = scoreWeights == null ? ScoreWeights.DEFAULT : scoreWeights;
         scenarios = List.copyOf(scenarios);
+        if (scenarios.stream().noneMatch(scenario -> scenario.weight() > 0)) {
+            throw new PlanException("at least one scenario must have a positive score weight");
+        }
         // Resolved means resolvable. A plan is archived with the results and launched from, so
         // leaving the graph unchecked until someone calls executionOrder() makes validation
         // optional on the one type whose job is to be already valid.
@@ -44,7 +56,32 @@ public record RunPlan(
     }
 
     public static RunPlan of(String runId, String outputDirectory, List<ScenarioSpec> scenarios) {
-        return new RunPlan(runId, Laymark.PROTOCOL_VERSION, scenarios, outputDirectory);
+        return of(runId, outputDirectory, WindowSize.DEFAULT, scenarios);
+    }
+
+    public static RunPlan of(
+            String runId, String outputDirectory, WindowSize window, List<ScenarioSpec> scenarios) {
+        return of(runId, outputDirectory, window, ScoreWeights.DEFAULT, scenarios);
+    }
+
+    public static RunPlan of(
+            String runId,
+            String outputDirectory,
+            WindowSize window,
+            ScoreWeights scoreWeights,
+            List<ScenarioSpec> scenarios) {
+        return new RunPlan(
+                runId, Laymark.PROTOCOL_VERSION, window, scoreWeights, scenarios, outputDirectory);
+    }
+
+    /** Source-compatible shape from before score weights were archived in the plan. */
+    public RunPlan(
+            String runId,
+            int protocolVersion,
+            WindowSize window,
+            List<ScenarioSpec> scenarios,
+            String outputDirectory) {
+        this(runId, protocolVersion, window, ScoreWeights.DEFAULT, scenarios, outputDirectory);
     }
 
     /**

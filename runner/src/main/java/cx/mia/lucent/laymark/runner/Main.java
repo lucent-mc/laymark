@@ -4,6 +4,7 @@ import cx.mia.lucent.laymark.core.Laymark;
 import cx.mia.lucent.laymark.core.plan.RunPlan;
 import cx.mia.lucent.laymark.core.scenario.ConfigCodec;
 import cx.mia.lucent.laymark.core.scenario.ScenarioConfig;
+import cx.mia.lucent.laymark.core.scenario.ScenarioConfigFile;
 import cx.mia.lucent.laymark.core.result.RunResult;
 import cx.mia.lucent.laymark.runner.launch.LaunchException;
 import cx.mia.lucent.laymark.runner.launch.ModrinthInstance;
@@ -340,16 +341,22 @@ public final class Main {
     /**
      * Resolves the instance's own config into this run's plan.
      *
-     * <p>{@code config/laymark.json} <em>is</em> the plan: hand-authored, the single source of
+     * <p>{@code config/laymark.jsonc} <em>is</em> the plan: hand-authored, the single source of
      * what a run measures, and read by runner and harness alike so the two sides cannot drift.
      * There is no other place scenarios come from — no flag-built scenario, no browsed file —
      * because a second source is a second thing the archived result could disagree with.
      *
-     * <p>Laymark ships no scenarios of its own. What to measure is the operator's decision.
+     * <p>The created reference contains illustrative scenarios until the operator replaces them.
      */
     private static RunPlan plan(ModrinthInstance instance, String runId, Path outputDirectory) {
-        return readConfig(instance.gameDirectory().resolve(Laymark.CONFIG_PATH))
-                .resolve(runId, outputDirectory.toString());
+        Path config;
+        try {
+            config = ScenarioConfigFile.ensureExists(instance.gameDirectory());
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "could not create " + ScenarioConfigFile.path(instance.gameDirectory()), e);
+        }
+        return readConfig(config).resolve(runId, outputDirectory.toString());
     }
 
     /** Scene paths in the config resolve relative to the config's own directory. */
@@ -500,7 +507,7 @@ public final class Main {
 
                 Runs the instance's scenario config and reports what it measured.
 
-                Scenarios come from one place: <instance>/config/laymark.json, hand-authored.
+                Scenarios come from one place: <instance>/config/laymark.jsonc, hand-authored.
                 Results and working state go to <instance>/.laymark/.
 
                 With no arguments at all, opens the planning window.

@@ -43,6 +43,26 @@ public sealed interface Frame {
      */
     record ScenarioFinished(String scenarioId, boolean ok, String detail) implements Frame {}
 
+    /**
+     * One scenario's numbers, sent the moment the capture closes — hours before the arm's result
+     * file exists. Streaming courtesy only: the result file stays the authoritative record, and a
+     * run that never sends this frame is merely quieter, not less correct.
+     *
+     * @param pass the {@code Pass} name; cold passes are context, warm passes are the score
+     * @param scoredMillis the scenario's scored metric under the plan's stop condition
+     * @param heapUsedMegabytes retained heap after the capture's post-window collection
+     */
+    record ScenarioMeasured(
+            String scenarioId,
+            int repetition,
+            String pass,
+            double scoredMillis,
+            Double mspt,
+            Double fps,
+            Double msPerChunk,
+            Double heapUsedMegabytes)
+            implements Frame {}
+
     /** Terminal, unsuccessful. */
     record RunFailed(String reason, String detail) implements Frame {}
 

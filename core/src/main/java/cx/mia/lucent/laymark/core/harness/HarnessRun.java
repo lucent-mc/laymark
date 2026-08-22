@@ -169,6 +169,23 @@ public final class HarnessRun {
         try {
             ScenarioResult result =
                     measure(scenario, repetition, pass, position, world, owns, startedAt);
+            if (result.outcome() != ScenarioResult.Outcome.FAILED) {
+                try {
+                    var channels = cx.mia.lucent.laymark.core.result.Channels.of(result, plan);
+                    events.accept(
+                            new Frame.ScenarioMeasured(
+                                    scenario.id(),
+                                    repetition,
+                                    pass.name(),
+                                    channels.scoredMillis(),
+                                    channels.mspt(),
+                                    channels.fps(),
+                                    channels.msPerChunk(),
+                                    channels.heapUsedMegabytes()));
+                } catch (RuntimeException statsUnavailable) {
+                    // Streaming is a courtesy; the result file remains the authoritative record.
+                }
+            }
             events.accept(
                     new Frame.ScenarioFinished(
                             scenario.id(),
@@ -316,9 +333,9 @@ public final class HarnessRun {
                 new Frame.PhaseEntered(
                         scenario.id(), Phase.UNGENERATED_TRAVERSAL, phaseStartedAt));
 
-        port.beginCapture();
+        port.beginCapture(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         port.teleport(scenario.pose());
-        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         return port.endCapture();
     }
 
@@ -353,6 +370,7 @@ public final class HarnessRun {
             port.pregenerate(
                     scenario.pose(), scenario.preset().renderDistance(), PREGENERATION_TIMEOUT);
         }
+        port.prepareForStreaming(scenario.pose(), viewDistance(scenario));
         if (!port.targetHasNoBuiltSections(scenario.pose())) {
             throw new HarnessException(
                     "scenario " + scenario.id() + " measures client streaming, but the target is"
@@ -360,9 +378,9 @@ public final class HarnessRun {
         }
 
         events.accept(new Frame.PhaseEntered(scenario.id(), Phase.GENERATED_STREAMING, phaseStartedAt));
-        port.beginCapture();
+        port.beginCapture(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         port.teleport(scenario.pose());
-        port.awaitStop(scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        port.awaitStop(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
         return port.endCapture();
     }
 
@@ -383,8 +401,19 @@ public final class HarnessRun {
     private Measurement residentAt(ScenarioSpec scenario, Phase phase, long phaseStartedAt) {
         port.position(scenario.pose());
         events.accept(new Frame.PhaseEntered(scenario.id(), phase, phaseStartedAt));
-        return port.capture(
-                scenario.stopCondition(), scenario.pose(), scenario.preset().renderDistance());
+        return port.capture(scenario.stopCondition(), scenario.pose(), viewDistance(scenario));
+    }
+
+    /**
+     * The view distance handed to the port for chunk counting.
+     *
+     * <p>Zero when the preset does not pin one, which the plan validation only permits for stop
+     * conditions that never count chunks — the port ignores the value on those paths. Chunky's
+     * pre-generation footprint goes through the strict accessor instead, because there the radius
+     * is the work.
+     */
+    private static int viewDistance(ScenarioSpec scenario) {
+        return scenario.preset().pinnedViewDistance().orElse(0);
     }
 
     /**

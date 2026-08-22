@@ -142,18 +142,19 @@ Verified end to end with the full modded pack, through world creation and entry.
 ```text
 <instance>/
   laymark-runner-<version>.jar   the runner itself, double-clickable
-  config/laymark.json            the scenario config: hand-authored, THE plan
+  config/laymark.jsonc           the scenario config: hand-authored, THE plan
   mods/              participants only: the baseline floor and all candidates
   .laymark/          Laymark's working state: withheld mods, staged scenes, results
 ```
 
-**`config/laymark.json` is the single source of what a run measures**, and it is hand-authored —
-the runner never writes it. Runner and harness resolve the same document (the runner for
-scheduling and timeouts, the harness for execution), so there is no separate plan file to drift
-from it; the run id and output directory, the only run-shaped facts the config cannot carry, pass
-on the launch command line, and the fully resolved plan is archived beside the results. Everything
-Laymark produces or caches lives under **`.laymark/`**, dot-prefixed so launchers, pack tooling and
-Inlay all read it as internal state rather than authored content.
+**`config/laymark.jsonc` is the single source of what a run measures**, and it is hand-authored.
+The runner and mod each create it from the complete commented reference when it is absent; after
+that neither overwrites it. Runner and harness resolve the same document (the runner for scheduling
+and timeouts, the harness for execution), so there is no separate plan file to drift from it; the
+run id and output directory, the only run-shaped facts the config cannot carry, pass on the launch
+command line, and the fully resolved plan is archived beside the results. Everything Laymark
+produces or caches lives under **`.laymark/`**, dot-prefixed so launchers, pack tooling and Inlay all
+read it as internal state rather than authored content.
 
 The runner sits at the **instance root**. It is the file someone opens, and the first place they
 look for it is the folder they already have open.
@@ -174,7 +175,7 @@ look for it is the folder they already have open.
   ```text
   laymark-runner-*.jar
   .laymark/
-  config/laymark.json
+  config/laymark.jsonc
   config/laymark-dependencies.json
   ```
 
@@ -240,7 +241,7 @@ constructs — so port discovery and the startup race both disappear.
 - The **launch facts** are `-Dlaymark.*` system properties — port, token, run id, output directory
   — which cannot be stale the way a leftover run file could. The mod defines the contract; the
   runner satisfies it.
-- The **scenarios come from `config/laymark.json`** (§5.3), which both sides resolve; the resolved
+- The **scenarios come from `config/laymark.jsonc`** (§5.3), which both sides resolve; the resolved
   plan is archived beside the results, never written into the instance.
 
 Bind `127.0.0.1` explicitly rather than `0.0.0.0` to avoid the Windows Firewall prompt.
@@ -340,8 +341,9 @@ required, not optional.
 
 ### 6.3 Measurement channels
 
-**Every scenario always records the same channel set.** The stop condition selects only which
-channel is the **scored** metric; everything else is recorded and reported as diagnostic. A
+**Every scenario always records the same channel set.** The stop condition selects the primary
+**speed** metric; retained heap is a separately normalized scored objective. Everything else is
+recorded and reported as diagnostic. A
 three-day run must never end with the realisation that the interesting channel was not captured.
 
 | Channel | Source | Scored |
@@ -352,7 +354,7 @@ three-day run must never end with the realisation that the interesting channel w
 | GPU execution time | vanilla `TimerQuery`, harvested asynchronously | no |
 | Integrated-server MSPT and TPS | Spark statistics | no |
 | GC | Spark statistics | no |
-| Heap | `Runtime`, read at each end — `spark-api` exposes no heap | no |
+| Retained heap | `Runtime`, after explicit GC outside the timed window | **yes** |
 | Work performed | rendered sections, client chunks, server chunks, at each end | no |
 | Time per chunk | derived | for completion targets |
 | Throttle reason, per frame | `FramerateLimitTracker` | no |
@@ -415,8 +417,9 @@ period they cover instead of assuming it matches the capture. (This corrects
 MSPT; the published jar has `SECONDS_10`.) GC is exempt — Spark reports cumulative totals, so that
 one really is differenced across the capture.
 
-Second limit: `spark-api` exposes no heap figure at all, so heap alone is read from `Runtime`. GC
-still comes from Spark.
+Second limit: `spark-api` exposes no heap figure at all, so heap alone is read from `Runtime`. Raw
+occupancy mostly records when G1 happened to run, so scoring uses the retained live set after an
+explicit collection outside the frame window. GC still comes from Spark.
 
 The Spark **profiler** is an opt-in diagnostic pass whose metrics can never reach a score:
 Spark ships no async-profiler binary for Windows and falls back to a sampler whose overhead scales
@@ -543,16 +546,19 @@ the current baseline, ranks them, and promotes the single best. Because nothing 
 candidate is re-measured against each new baseline — which is why combination-only benefits surface
 without a pair-rescue phase, and why **the per-round ranking history is output rather than scratch**.
 
-**Stop when the best remaining candidate regresses.** Margin-of-error candidates keep being
-promoted, which is required: a combination-only mod presents as margin-of-error, not as a regression.
+**Top score wins, and the run walks the whole pool.** The composite score prices every trade the
+run measured and ranks each lap; the winner is promoted whatever its sign, because Laymark reports
+measurements rather than making decisions. The cumulative column shows where returns turned
+negative -- where to stop the stack is the operator's call.
 
 **Conflicts branch the selection** into diverging stacks. Branches share their prefix and the bound
 is conflict clusters rather than candidate count, so this does not meaningfully explode. Report the
 projected run count before starting.
 
-**Promotion order matters for runtime too:** completion-target scenarios finish faster on a better
-stack, so promoting the biggest improver first makes all remaining work cheaper. Selection is still
-by weighted score — runtime must not influence which stack is recommended.
+**Promotion order follows the composite score.** Speed percentages are cost-weighted by paired
+baseline milliseconds; memory percentages are cost-weighted by paired retained MiB. Those two
+objectives are normalized independently and combined by `scoreWeights`, with each scenario's
+optional `weight` acting as a relevance multiplier in both.
 
 Cost: a comparison is `2 arms × 3 passes × S scenarios`; selection over N mods is `N(N+1)/2`
 comparisons, reduced by the baseline interval. Long runs are accepted; there is no screening tier.

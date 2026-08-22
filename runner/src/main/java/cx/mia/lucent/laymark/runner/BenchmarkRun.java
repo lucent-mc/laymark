@@ -85,7 +85,8 @@ public final class BenchmarkRun {
                             server.port(),
                             server.token(),
                             plan.runId(),
-                            plan.outputDirectory());
+                            plan.outputDirectory(),
+                            plan.window());
 
             System.out.printf(
                     "listening on 127.0.0.1:%d%nrunning %d scenario(s) from plan %s%n",
@@ -160,6 +161,18 @@ public final class BenchmarkRun {
                                                     if (frame instanceof Frame.ScenarioStarted started) {
                                                         listener.scenarioStarted(
                                                                 started.scenarioId(), started.repetition());
+                                                    }
+                                                    if (frame instanceof Frame.ScenarioMeasured m) {
+                                                        listener.scenarioMeasured(
+                                                                new ExperimentListener.LiveSample(
+                                                                        m.scenarioId(),
+                                                                        m.repetition(),
+                                                                        "WARM".equals(m.pass()),
+                                                                        m.scoredMillis(),
+                                                                        m.mspt(),
+                                                                        m.fps(),
+                                                                        m.msPerChunk(),
+                                                                        m.heapUsedMegabytes()));
                                                     }
                                                     if (frame instanceof Frame.RunFinished
                                                             || frame instanceof Frame.RunFailed) {
@@ -271,8 +284,9 @@ public final class BenchmarkRun {
     /**
      * Confirms the config the harness will read is there, before paying for a launch.
      *
-     * <p>The runner never writes it. {@code config/laymark.json} is hand-authored and both sides
-     * resolve the same document, so there is no plan file to stage and nothing to drift.
+     * <p>The runner creates {@code config/laymark.jsonc} from the complete reference when missing,
+     * then never overwrites it. Both sides resolve the same document, so there is no plan file to
+     * stage and nothing to drift.
      */
     private static void requireConfig(ModrinthInstance instance) {
         if (!Files.isRegularFile(instance.gameDirectory().resolve(Laymark.CONFIG_PATH))) {
