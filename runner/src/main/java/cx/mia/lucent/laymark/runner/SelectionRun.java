@@ -430,18 +430,19 @@ public final class SelectionRun {
 
                 Map<String, List<Comparison>> gateComparisons =
                         activeComparisons(byCandidate, memoryByCandidate, plan);
-                BandGate gate = new BandGate(gateComparisons);
+                // One score, computed once, judging and ranking alike. A gate consulting anything
+                // the ranking does not consult is how a +11 once beat a +34.
+                Map<String, Double> scoreByCandidate = new LinkedHashMap<>();
+                for (String candidate : gateComparisons.keySet()) {
+                    scoreByCandidate.put(
+                            candidate,
+                            compositeScore(candidate, byCandidate, memoryByCandidate, plan));
+                }
+                BandGate gate = new BandGate(gateComparisons, scoreByCandidate);
                 Selection.Ranking ranking =
                         bundle ->
-                                gateComparisons
-                                                .getOrDefault(bundle.candidate(), List.of())
-                                                .isEmpty()
-                                        ? Double.NEGATIVE_INFINITY
-                                        : compositeScore(
-                                                bundle.candidate(),
-                                                byCandidate,
-                                                memoryByCandidate,
-                                                plan);
+                                scoreByCandidate.getOrDefault(
+                                        bundle.candidate(), Double.NEGATIVE_INFINITY);
                 List<Selection.Outcome> outcomes = selection.round(remaining, gate, ranking);
 
                 String promoted =
@@ -1108,10 +1109,10 @@ public final class SelectionRun {
     /**
      * Why a candidate did not win, in the terms that decided it.
      *
-     * <p>The score ranks; the bands gate, and a regression in any scenario on any objective
-     * blocks promotion however large the gains elsewhere. Left unsaid, a card leading with a big
-     * green score and the word "regressed" underneath is a riddle -- so the regressions are named
-     * here, with the objective, because "which one" is the whole question.
+     * <p>Promotion is the composite score's alone -- top positive score wins -- so a "regressed"
+     * verdict means the candidate's net score was not a gain <em>and</em> something was measurably
+     * worse. Those regressions are named here, with the objective, because "which one" is the
+     * whole question a losing card raises.
      */
     private static String blockedBecause(
             Selection.Outcome outcome, List<Comparison> speed, List<Comparison> memory) {
@@ -1133,7 +1134,7 @@ public final class SelectionRun {
         }
         return regressions.isEmpty()
                 ? outcome.detail()
-                : "blocked by " + String.join(", ", regressions);
+                : "no net gain; regressed: " + String.join(", ", regressions);
     }
 
     private static Metrics meanMetrics(List<Measured> runs) {

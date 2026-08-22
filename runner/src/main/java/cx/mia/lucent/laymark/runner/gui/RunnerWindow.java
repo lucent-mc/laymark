@@ -1770,8 +1770,8 @@ public final class RunnerWindow implements ExperimentListener {
         JLabel verdict = Theme.small(score.verdict());
         verdict.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(verdict);
-        // The score ranks, the bands decide. When they disagree -- a large score that still lost
-        // -- the card has to say which comparison blocked it, or the number reads as the verdict.
+        // Top score wins; a verdict below the score explains a loss (no net gain, and which
+        // comparisons regressed), or the number would read as the verdict.
         if (score.detail() != null && !score.detail().isBlank()) {
             JLabel reason = Theme.small(score.detail());
             reason.setForeground(

@@ -7,24 +7,32 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Decides promotion from a candidate's comparisons across every scenario.
+ * Decides promotion from the same composite score the round is ranked by.
  *
- * <p>This is the gate slice 6 left as a seam. It is deliberately not a threshold on a number: a
- * candidate is promoted on the strength of its {@link Band}s, which already carry the interval and
- * the practical floor, so the rule here is about combining scenarios rather than about statistics.
+ * <p><strong>One number, one rule: top score wins.</strong> The score already prices every trade
+ * the run measured — scenario costs weight the percentages, {@code scoreWeights} balances speed
+ * against memory — so a second veto on top of it would double-count the same evidence and let a
+ * side-channel overrule the number the operator tuned. A regression is <em>in</em> the score, at
+ * the price the config gave it, and a candidate whose gains outweigh a regression wins with it.
  *
- * <p><strong>Margin-of-error candidates are promoted.</strong> That looks wrong and is required: a
- * mod whose benefit only appears in combination with another presents as no-measurable-difference
- * on its own, and a gate that demanded a clear win would drop it before its partner ever arrived.
- * The stopping rule is a regression, not an absence of gain.
+ * <p>What the gate still owes: a candidate with no comparisons cannot be ranked (BLOCKED), and a
+ * candidate whose net score is not a gain must not be promoted — that is the stopping rule, since
+ * a lap where nothing scores positive has nothing left worth adding. The verdict then says why:
+ * REGRESSED where something was measurably worse, INCONCLUSIVE where nothing was.
  */
 public final class BandGate implements Selection.Gate {
 
     private final Map<String, List<Comparison>> byCandidate;
+    private final Map<String, Double> scoreByCandidate;
 
-    /** @param comparisons every scenario's result for every candidate this round */
-    public BandGate(Map<String, List<Comparison>> comparisons) {
+    /**
+     * @param comparisons every scenario's result for every candidate this round
+     * @param scores each candidate's composite score — the same number the ranking uses, because
+     *     a gate judging by a different number than the ranking is how a +11 beats a +34
+     */
+    public BandGate(Map<String, List<Comparison>> comparisons, Map<String, Double> scores) {
         this.byCandidate = Map.copyOf(comparisons);
+        this.scoreByCandidate = Map.copyOf(scores);
     }
 
     @Override
@@ -33,19 +41,16 @@ public final class BandGate implements Selection.Gate {
         if (comparisons == null || comparisons.isEmpty()) {
             return Selection.Verdict.BLOCKED;
         }
-
-        // A regression anywhere blocks promotion, even alongside gains elsewhere. Scenarios are
-        // not interchangeable -- a mod that helps chunk loading and hurts steady render is a
-        // trade, and averaging the two would hide the trade rather than present it.
+        if (scoreByCandidate.getOrDefault(bundle.candidate(), 0.0) > 0) {
+            return Selection.Verdict.PROMOTED;
+        }
+        // No net gain. The distinction between the two losing verdicts is honesty about why:
+        // "regressed" claims something was measurably worse, and may only be said of a candidate
+        // with a regressed band in evidence.
         if (comparisons.stream().anyMatch(c -> c.band() == Band.REGRESSED)) {
             return Selection.Verdict.REGRESSED;
         }
-        if (comparisons.stream().anyMatch(c -> c.band() == Band.IMPROVED)) {
-            return Selection.Verdict.PROMOTED;
-        }
-        // Everything is negligible or unmeasurable. Promoted anyway, because a combination-only
-        // benefit is indistinguishable from this until its partner is present.
-        return Selection.Verdict.PROMOTED;
+        return Selection.Verdict.INCONCLUSIVE;
     }
 
     /**
