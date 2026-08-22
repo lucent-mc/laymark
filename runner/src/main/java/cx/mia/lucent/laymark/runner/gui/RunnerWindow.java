@@ -595,9 +595,28 @@ public final class RunnerWindow implements ExperimentListener {
         JPanel header = new JPanel(new BorderLayout());
         header.setOpaque(false);
         header.add(Theme.heading("Log"), BorderLayout.WEST);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        buttons.setOpaque(false);
+        // Copying beats scrolling and dragging: the log is what gets pasted into a bug report,
+        // and a selection made by hand in a view that keeps appending is a selection that loses.
+        JButton copy = Theme.button("Copy", false);
+        copy.setToolTipText("Copy the whole log to the clipboard");
+        copy.addActionListener(
+                unused -> {
+                    java.awt.Toolkit.getDefaultToolkit()
+                            .getSystemClipboard()
+                            .setContents(
+                                    new java.awt.datatransfer.StringSelection(log.getText()), null);
+                    copy.setText("Copied");
+                    Timer restore = new Timer(1200, event -> copy.setText("Copy"));
+                    restore.setRepeats(false);
+                    restore.start();
+                });
         JButton clear = Theme.button("Clear", false);
         clear.addActionListener(unused -> log.setText(""));
-        header.add(clear, BorderLayout.EAST);
+        buttons.add(copy);
+        buttons.add(clear);
+        header.add(buttons, BorderLayout.EAST);
 
         log.setEditable(false);
         log.setFont(Theme.MONO);
@@ -881,6 +900,119 @@ public final class RunnerWindow implements ExperimentListener {
                     renderLiveColumn();
                     refresh();
                 });
+    }
+
+    /** How long a failure waits for an answer before an unattended run carries on without one. */
+    private static final int RECOVERY_TIMEOUT_MILLIS = 5 * 60 * 1000;
+
+    /**
+     * Asks what to do about a failed arm, blocking the experiment thread until told.
+     *
+     * <p>Times out into the unattended default rather than waiting forever: a benchmark left
+     * holding the machine on a dialog nobody is in the room to answer has wasted the night, and
+     * skipping one arm is recoverable where losing the remaining hours is not.
+     */
+    @Override
+    public ExperimentListener.Recovery armFailed(int sequence, Arm arm, String reason) {
+        ExperimentListener.Recovery fallback =
+                arm.kind() == Arm.Kind.CANDIDATE
+                        ? ExperimentListener.Recovery.SKIP
+                        : ExperimentListener.Recovery.STOP;
+        java.util.concurrent.atomic.AtomicReference<ExperimentListener.Recovery> answer =
+                new java.util.concurrent.atomic.AtomicReference<>(fallback);
+        try {
+            SwingUtilities.invokeAndWait(
+                    () -> {
+                        state("Arm failed", Theme.BAD);
+                        answer.set(askRecovery(sequence, arm, reason, fallback));
+                    });
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ExperimentListener.Recovery.STOP;
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            return fallback;
+        }
+        SwingUtilities.invokeLater(
+                () ->
+                        state(
+                                answer.get() == ExperimentListener.Recovery.STOP
+                                        ? "Stopping"
+                                        : "Running",
+                                answer.get() == ExperimentListener.Recovery.STOP
+                                        ? Theme.BAD
+                                        : Theme.GOOD));
+        return answer.get();
+    }
+
+    /** The dialog itself, on the EDT: three choices, the reason, and a way to copy it. */
+    private ExperimentListener.Recovery askRecovery(
+            int sequence, Arm arm, String reason, ExperimentListener.Recovery fallback) {
+        String[] choices = {"Retry arm", "Skip arm", "Stop run"};
+        JTextArea detail = new JTextArea(reason);
+        detail.setEditable(false);
+        detail.setLineWrap(true);
+        detail.setWrapStyleWord(true);
+        detail.setFont(Theme.MONO);
+        detail.setBackground(Theme.CARD);
+        detail.setForeground(Theme.TEXT);
+        JScrollPane scroll = Theme.scroll(detail);
+        scroll.setPreferredSize(new Dimension(560, 120));
+
+        JPanel body = new JPanel(new BorderLayout(0, 8));
+        body.setOpaque(false);
+        body.add(
+                new JLabel(
+                        "Arm " + sequence + " (" + display(arm.id()) + ") did not finish."),
+                BorderLayout.NORTH);
+        body.add(scroll, BorderLayout.CENTER);
+        JButton copyReason = Theme.button("Copy details", false);
+        copyReason.addActionListener(
+                unused ->
+                        java.awt.Toolkit.getDefaultToolkit()
+                                .getSystemClipboard()
+                                .setContents(
+                                        new java.awt.datatransfer.StringSelection(
+                                                "arm " + sequence + " " + arm.id() + ": " + reason),
+                                        null));
+        JPanel south = new JPanel(new BorderLayout());
+        south.setOpaque(false);
+        south.add(copyReason, BorderLayout.WEST);
+        south.add(
+                Theme.small(
+                        "No answer in 5 minutes "
+                                + (fallback == ExperimentListener.Recovery.SKIP
+                                        ? "skips this arm."
+                                        : "stops the run.")),
+                BorderLayout.EAST);
+        body.add(south, BorderLayout.SOUTH);
+
+        JOptionPane pane =
+                new JOptionPane(
+                        body,
+                        JOptionPane.ERROR_MESSAGE,
+                        JOptionPane.DEFAULT_OPTION,
+                        null,
+                        choices,
+                        choices[fallback == ExperimentListener.Recovery.SKIP ? 1 : 2]);
+        javax.swing.JDialog dialog = pane.createDialog(frame, "Arm failed");
+        Timer timeout = new Timer(RECOVERY_TIMEOUT_MILLIS, unused -> dialog.setVisible(false));
+        timeout.setRepeats(false);
+        timeout.start();
+        dialog.setVisible(true);
+        timeout.stop();
+        dialog.dispose();
+
+        Object chosen = pane.getValue();
+        if (choices[0].equals(chosen)) {
+            return ExperimentListener.Recovery.RETRY;
+        }
+        if (choices[1].equals(chosen)) {
+            return ExperimentListener.Recovery.SKIP;
+        }
+        if (choices[2].equals(chosen)) {
+            return ExperimentListener.Recovery.STOP;
+        }
+        return fallback; // dismissed or timed out
     }
 
     @Override

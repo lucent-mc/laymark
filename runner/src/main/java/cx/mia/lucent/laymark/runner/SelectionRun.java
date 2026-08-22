@@ -73,6 +73,27 @@ public final class SelectionRun {
                 .toList();
     }
 
+    /**
+     * Moves a failed attempt's output aside so the retry starts on clean ground.
+     *
+     * <p>Kept, not deleted: the game log and the event stream are the only account of why the arm
+     * failed, and a retry that overwrote them would destroy the evidence for the very failure it
+     * exists to answer. Best-effort — a retry blocked by a locked directory is worse than a retry
+     * whose predecessor went unarchived.
+     */
+    private static void keepFailedAttempt(Path armOutput, int attempt) {
+        if (!Files.isDirectory(armOutput)) {
+            return;
+        }
+        Path kept = armOutput.resolveSibling(armOutput.getFileName() + ".failed-" + attempt);
+        try {
+            Files.move(armOutput, kept);
+            System.out.printf("  kept the failed attempt at %s%n", kept.getFileName());
+        } catch (IOException e) {
+            System.out.printf("  could not archive the failed attempt: %s%n", e.getMessage());
+        }
+    }
+
     /** Every scenario that produced a measurement this lap, in first-seen order. */
     private static List<String> scenarioIds(List<Measured> measured) {
         return measured.stream().map(Measured::scenarioId).distinct().toList();
@@ -274,39 +295,65 @@ public final class SelectionRun {
                                             }
                                         }
                                     };
-                    RunResult result;
-                    try {
-                        result =
-                                BenchmarkRun.execute(
-                                        instance,
-                                        armPlan,
-                                        armOutput,
-                                        sceneRoot,
-                                        timeoutPerRun,
-                                        control,
-                                        tap);
-                    } catch (RuntimeException e) {
-                        if (control.stopping()) {
+                    // A failed arm is a decision, not the end of the experiment: hours of machine
+                    // time are already on disk, so the operator is asked whether to retry it,
+                    // skip it, or stop -- and an unattended run answers with the default policy.
+                    RunResult result = null;
+                    boolean skipArm = false;
+                    for (int attempt = 1; result == null; attempt++) {
+                        try {
+                            result =
+                                    BenchmarkRun.execute(
+                                            instance,
+                                            armPlan,
+                                            armOutput,
+                                            sceneRoot,
+                                            timeoutPerRun,
+                                            control,
+                                            tap);
+                        } catch (RuntimeException e) {
+                            if (control.stopping()) {
+                                listener.runFinished(sequence, arm, 0, true);
+                                stopped = true;
+                                break;
+                            }
+                            String reason = String.valueOf(e.getMessage());
+                            System.out.printf("  arm failed: %s%n", reason);
+                            ExperimentListener.Recovery recovery =
+                                    listener.armFailed(sequence, arm, reason);
+                            if (recovery == ExperimentListener.Recovery.STOP) {
+                                // Ends the run the way the Stop button does, rather than throwing:
+                                // the laps already measured are hours of machine time and they
+                                // still deserve a report, with the failure on its validity page.
+                                trustFlags.add(
+                                        "arm " + sequence + " (" + arm.id() + ") failed and ended"
+                                                + " the run: " + reason);
+                                listener.runFinished(sequence, arm, 0, true);
+                                stopped = true;
+                                break;
+                            }
+                            trustFlags.add(
+                                    "arm " + sequence + " (" + arm.id() + ") attempt " + attempt
+                                            + " failed: " + reason);
+                            if (recovery == ExperimentListener.Recovery.RETRY) {
+                                // The failed attempt keeps its evidence beside the retry; a
+                                // second attempt writing over the first would destroy the logs
+                                // that explain why there was a second attempt.
+                                keepFailedAttempt(armOutput, attempt);
+                                System.out.printf("  retrying arm %d (attempt %d)%n", sequence,
+                                        attempt + 1);
+                                continue;
+                            }
+                            failedArms.merge(arm.id(), 1, Integer::sum);
                             listener.runFinished(sequence, arm, 0, true);
-                            stopped = true;
+                            skipArm = true;
                             break;
                         }
-                        // A candidate arm that hangs or dies costs its own comparison, not the
-                        // experiment. With a hundred arms scheduled, one bad mod must not throw
-                        // away every measurement taken before it -- and "this mod cannot even
-                        // complete a run" is itself a finding worth reaching the report.
-                        //
-                        // The baseline and the acclimation arm are not optional in the same way:
-                        // every candidate in the lap is measured against the baseline, so losing
-                        // it leaves nothing for the rest of the lap to mean.
-                        if (arm.kind() != Arm.Kind.CANDIDATE) {
-                            throw e;
-                        }
-                        System.out.printf("  arm failed, continuing: %s%n", e.getMessage());
-                        trustFlags.add(
-                                "arm " + sequence + " (" + arm.id() + ") failed: " + e.getMessage());
-                        failedArms.merge(arm.id(), 1, Integer::sum);
-                        listener.runFinished(sequence, arm, 0, true);
+                    }
+                    if (stopped) {
+                        break;
+                    }
+                    if (skipArm) {
                         sequence++;
                         continue;
                     }

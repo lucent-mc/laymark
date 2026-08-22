@@ -76,6 +76,31 @@ public interface ExperimentListener {
     /** @param scoredMillis the run's scored metric, averaged across scenarios; 0 when it failed */
     default void runFinished(int sequence, Arm arm, double scoredMillis, boolean failed) {}
 
+    /** What to do about an arm that did not produce a result. */
+    enum Recovery {
+        /** Launch it again. The failed attempt's output is kept beside the retry. */
+        RETRY,
+        /** Give up on this arm and carry on. Its absence is recorded as a trust flag. */
+        SKIP,
+        /** End the experiment, keeping whatever the completed arms measured. */
+        STOP
+    }
+
+    /**
+     * An arm failed; the experiment thread is waiting on the answer.
+     *
+     * <p>A benchmark is hours of machine time, so the failure of one launch is a decision worth
+     * asking about rather than a reason to discard everything measured before it. The default is
+     * the unattended policy: a candidate is skipped, because losing one comparison costs one
+     * comparison, and anything else stops, because every candidate in the lap is measured against
+     * the baseline and a lap without one means nothing.
+     *
+     * @param reason the failure, already formatted for a human
+     */
+    default Recovery armFailed(int sequence, Arm arm, String reason) {
+        return arm.kind() == Arm.Kind.CANDIDATE ? Recovery.SKIP : Recovery.STOP;
+    }
+
     /**
      * A candidate's standing while the round is still running, every channel included: the
      * aggregate of all this candidate's measured arms so far against the baseline arms measured so
