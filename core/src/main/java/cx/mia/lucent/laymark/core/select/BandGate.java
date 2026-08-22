@@ -1,56 +1,38 @@
 package cx.mia.lucent.laymark.core.select;
 
 import cx.mia.lucent.laymark.core.harness.HarnessException;
-import cx.mia.lucent.laymark.core.stats.Band;
 import cx.mia.lucent.laymark.core.stats.Comparison;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Decides promotion from the same composite score the round is ranked by.
+ * Decides eligibility; the composite score decides everything else.
  *
- * <p><strong>One number, one rule: top score wins.</strong> The score already prices every trade
- * the run measured — scenario costs weight the percentages, {@code scoreWeights} balances speed
- * against memory — so a second veto on top of it would double-count the same evidence and let a
- * side-channel overrule the number the operator tuned. A regression is <em>in</em> the score, at
- * the price the config gave it, and a candidate whose gains outweigh a regression wins with it.
+ * <p><strong>One number, one rule: top score wins — and Laymark never decides for the
+ * operator.</strong> The score prices every trade the run measured, ranks the lap, and its winner
+ * is promoted whatever the sign, because a lap whose best candidate scores −0.1 is still a
+ * measurement worth having: the run walks the whole pool, the report's cumulative column shows
+ * exactly where returns turned negative, and where to stop the stack is the operator's call. A
+ * benchmark that halted itself on a low number would be making that call for them.
  *
- * <p>What the gate still owes: a candidate with no comparisons cannot be ranked (BLOCKED), and a
- * candidate whose net score is not a gain must not be promoted — that is the stopping rule, since
- * a lap where nothing scores positive has nothing left worth adding. The verdict then says why:
- * REGRESSED where something was measurably worse, INCONCLUSIVE where nothing was.
+ * <p>All the gate refuses is the unmeasurable: a candidate with no comparisons cannot be ranked,
+ * and pretending otherwise would put an unmeasured mod into a measured ordering.
  */
 public final class BandGate implements Selection.Gate {
 
     private final Map<String, List<Comparison>> byCandidate;
-    private final Map<String, Double> scoreByCandidate;
 
-    /**
-     * @param comparisons every scenario's result for every candidate this round
-     * @param scores each candidate's composite score — the same number the ranking uses, because
-     *     a gate judging by a different number than the ranking is how a +11 beats a +34
-     */
-    public BandGate(Map<String, List<Comparison>> comparisons, Map<String, Double> scores) {
+    /** @param comparisons every scenario's result for every candidate this round */
+    public BandGate(Map<String, List<Comparison>> comparisons) {
         this.byCandidate = Map.copyOf(comparisons);
-        this.scoreByCandidate = Map.copyOf(scores);
     }
 
     @Override
     public Selection.Verdict judge(Bundle bundle) {
         List<Comparison> comparisons = byCandidate.get(bundle.candidate());
-        if (comparisons == null || comparisons.isEmpty()) {
-            return Selection.Verdict.BLOCKED;
-        }
-        if (scoreByCandidate.getOrDefault(bundle.candidate(), 0.0) > 0) {
-            return Selection.Verdict.PROMOTED;
-        }
-        // No net gain. The distinction between the two losing verdicts is honesty about why:
-        // "regressed" claims something was measurably worse, and may only be said of a candidate
-        // with a regressed band in evidence.
-        if (comparisons.stream().anyMatch(c -> c.band() == Band.REGRESSED)) {
-            return Selection.Verdict.REGRESSED;
-        }
-        return Selection.Verdict.INCONCLUSIVE;
+        return comparisons == null || comparisons.isEmpty()
+                ? Selection.Verdict.BLOCKED
+                : Selection.Verdict.PROMOTED;
     }
 
     /**

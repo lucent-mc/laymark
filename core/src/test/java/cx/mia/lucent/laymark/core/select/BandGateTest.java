@@ -50,9 +50,10 @@ class BandGateTest {
     }
 
     @Test
-    void topScoreWinsEvenOverARegressedBand() {
-        // A big win on one scenario, a real regression on another: the composite score prices
-        // the trade, so a net gain is promotable -- the gate must not veto what the score says.
+    void everyMeasurableCandidateIsEligibleWhateverItsBands() {
+        // Laymark reports; it does not decide. A real regression rides along in the score at the
+        // price the config gave it, and even an outright net loss stays eligible -- the lap's top
+        // score is promoted whatever its sign, and the report shows where returns went negative.
         Comparison bigWin = comparison("chunk-generation", 13.0, 4.4);
         Comparison smallLoss = comparison("chunk-loading", 1.5, 1.65);
         assertEquals(
@@ -62,42 +63,25 @@ class BandGateTest {
 
         BandGate gate =
                 new BandGate(
-                        Map.of("traded.jar", List.of(bigWin, smallLoss)),
-                        Map.of("traded.jar", 55.0));
+                        Map.of(
+                                "traded.jar", List.of(bigWin, smallLoss),
+                                "worse.jar", List.of(comparison("chunk-loading", 1.5, 1.8))));
         assertEquals(
                 Selection.Verdict.PROMOTED,
                 gate.judge(new Bundle("traded.jar", java.util.Set.of("traded.jar"))));
+        assertEquals(
+                Selection.Verdict.PROMOTED,
+                gate.judge(new Bundle("worse.jar", java.util.Set.of("worse.jar"))));
     }
 
     @Test
-    void aNetLossIsNotPromotedAndTheVerdictSaysWhy() {
-        Comparison loss = comparison("chunk-loading", 1.5, 1.8);
-        BandGate regressed =
-                new BandGate(Map.of("worse.jar", List.of(loss)), Map.of("worse.jar", -20.0));
+    void onlyTheUnmeasurableIsRefused() {
+        // The one thing the gate still owes: an unmeasured mod must not enter a measured
+        // ordering, because a rank implies a measurement that never happened.
+        BandGate gate = new BandGate(Map.of());
         assertEquals(
-                Selection.Verdict.REGRESSED,
-                regressed.judge(new Bundle("worse.jar", java.util.Set.of("worse.jar"))));
-
-        // A net non-gain with nothing measurably worse is inconclusive, not "regressed" --
-        // that word claims evidence. One run above the baseline and one below spans zero.
-        Comparison noise =
-                Comparison.of(
-                        "candidate",
-                        "chunk-loading",
-                        List.of(
-                                new Comparison.Run("baseline", 0, 1.5, true),
-                                new Comparison.Run("baseline", 3, 1.5, true)),
-                        List.of(
-                                new Comparison.Run("candidate", 1, 1.52, true),
-                                new Comparison.Run("candidate", 2, 1.48, true)),
-                        Comparison.DEFAULT_FLOOR_PERCENT);
-        assertEquals(
-                cx.mia.lucent.laymark.core.stats.Band.NO_MEASURABLE_DIFFERENCE, noise.band());
-        BandGate inconclusive =
-                new BandGate(Map.of("meh.jar", List.of(noise)), Map.of("meh.jar", 0.0));
-        assertEquals(
-                Selection.Verdict.INCONCLUSIVE,
-                inconclusive.judge(new Bundle("meh.jar", java.util.Set.of("meh.jar"))));
+                Selection.Verdict.BLOCKED,
+                gate.judge(new Bundle("ghost.jar", java.util.Set.of("ghost.jar"))));
     }
 
     private static Comparison comparison(String scenario, double baseline, double candidate) {

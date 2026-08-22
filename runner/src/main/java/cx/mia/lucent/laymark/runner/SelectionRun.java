@@ -42,10 +42,11 @@ import java.util.TreeSet;
  * candidates against the stack that now includes the winner. The answer to "is B worth adding" is
  * a different question once A is in, which is why every round re-measures instead of reusing.
  *
- * <p>Stops when a round promotes nothing — every remaining candidate regressed or was blocked —
- * or when the pool is empty. Nothing is ever eliminated: a candidate that lost a round is
- * re-measured in the next, because its bundle may have shrunk or its benefit may only exist in
- * combination.
+ * <p>Runs until the pool is empty: every lap promotes its top-scoring candidate whatever the
+ * sign, because Laymark reports measurements and the report shows where returns turned negative —
+ * where to stop the stack is the operator's call, not the tool's. Nothing is ever eliminated: a
+ * candidate that lost a round is re-measured in the next, because its bundle may have shrunk or
+ * its benefit may only exist in combination.
  */
 public final class SelectionRun {
 
@@ -477,15 +478,17 @@ public final class SelectionRun {
 
                 Map<String, List<Comparison>> gateComparisons =
                         activeComparisons(byCandidate, memoryByCandidate, plan);
-                // One score, computed once, judging and ranking alike. A gate consulting anything
-                // the ranking does not consult is how a +11 once beat a +34.
+                // One score, computed once, ranking every measurable candidate. The lap's top
+                // score is promoted whatever its sign: Laymark reports facts and walks the whole
+                // pool; where the returns stop being worth it is the operator's call, made from
+                // the report's cumulative column rather than by the tool on their behalf.
                 Map<String, Double> scoreByCandidate = new LinkedHashMap<>();
                 for (String candidate : gateComparisons.keySet()) {
                     scoreByCandidate.put(
                             candidate,
                             compositeScore(candidate, byCandidate, memoryByCandidate, plan));
                 }
-                BandGate gate = new BandGate(gateComparisons, scoreByCandidate);
+                BandGate gate = new BandGate(gateComparisons);
                 Selection.Ranking ranking =
                         bundle ->
                                 scoreByCandidate.getOrDefault(
@@ -522,7 +525,8 @@ public final class SelectionRun {
                 }
                 if (promoted == null) {
                     System.out.println(
-                            "no candidate qualified this round; the selection is finished");
+                            "no candidate could be measured this round; the selection is"
+                                    + " finished");
                     break;
                 }
                 System.out.printf("promoted: %s%n", promoted);
@@ -1144,7 +1148,7 @@ public final class SelectionRun {
                             delta(own.heapUsedMegabytes(), baseline.heapUsedMegabytes()),
                             vsOriginal.get(id),
                             outcome.verdict().toString().toLowerCase(java.util.Locale.ROOT),
-                            blockedBecause(
+                            describeRegressions(
                                     outcome,
                                     byCandidate.getOrDefault(id, List.of()),
                                     memoryByCandidate.getOrDefault(id, List.of())),
@@ -1154,18 +1158,15 @@ public final class SelectionRun {
     }
 
     /**
-     * Why a candidate did not win, in the terms that decided it.
+     * The candidate's measurably-worse comparisons, named — or the verdict's own detail.
      *
-     * <p>Promotion is the composite score's alone -- top positive score wins -- so a "regressed"
-     * verdict means the candidate's net score was not a gain <em>and</em> something was measurably
-     * worse. Those regressions are named here, with the objective, because "which one" is the
-     * whole question a losing card raises.
+     * <p>A fact, not a judgment: regressions are stated for winners and losers alike, with the
+     * scenario and the objective, because "which one" is the question the number raises. Whether
+     * a regression outweighs the gains is what the composite score already said, and whether
+     * either is worth shipping is the operator's call.
      */
-    private static String blockedBecause(
+    private static String describeRegressions(
             Selection.Outcome outcome, List<Comparison> speed, List<Comparison> memory) {
-        if (outcome.verdict() != Selection.Verdict.REGRESSED) {
-            return outcome.detail();
-        }
         List<String> regressions = new ArrayList<>();
         for (Comparison comparison :
                 java.util.stream.Stream.concat(speed.stream(), memory.stream()).toList()) {
@@ -1181,7 +1182,7 @@ public final class SelectionRun {
         }
         return regressions.isEmpty()
                 ? outcome.detail()
-                : "no net gain; regressed: " + String.join(", ", regressions);
+                : "regressed: " + String.join(", ", regressions);
     }
 
     private static Metrics meanMetrics(List<Measured> runs) {

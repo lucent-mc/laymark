@@ -546,10 +546,10 @@ the current baseline, ranks them, and promotes the single best. Because nothing 
 candidate is re-measured against each new baseline — which is why combination-only benefits surface
 without a pair-rescue phase, and why **the per-round ranking history is output rather than scratch**.
 
-**Top positive score wins; stop when nothing scores a net gain.** The composite score prices every
-trade the run measured, so it both ranks the round and gates promotion -- a regression does not
-veto a candidate whose gains outweigh it, and the verdicts (regressed, inconclusive) explain a loss
-rather than decide it.
+**Top score wins, and the run walks the whole pool.** The composite score prices every trade the
+run measured and ranks each lap; the winner is promoted whatever its sign, because Laymark reports
+measurements rather than making decisions. The cumulative column shows where returns turned
+negative -- where to stop the stack is the operator's call.
 
 **Conflicts branch the selection** into diverging stacks. Branches share their prefix and the bound
 is conflict clusters rather than candidate count, so this does not meaningfully explode. Report the

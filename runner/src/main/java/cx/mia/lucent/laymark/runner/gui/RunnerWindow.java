@@ -1907,7 +1907,7 @@ public final class RunnerWindow implements ExperimentListener {
         if (score.detail() != null && !score.detail().isBlank()) {
             JLabel reason = Theme.small(score.detail());
             reason.setForeground(
-                    "regressed".equals(score.verdict()) ? Theme.BAD : Theme.MUTED);
+                    score.detail().startsWith("regressed:") ? Theme.BAD : Theme.MUTED);
             reason.setToolTipText(score.detail());
             reason.setMinimumSize(new Dimension(0, 0));
             reason.setAlignmentX(Component.LEFT_ALIGNMENT);
